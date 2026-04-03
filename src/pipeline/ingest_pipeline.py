@@ -1,11 +1,10 @@
 import yaml
-import os
 from pathlib import Path
 from loading.loader import load_documents_from_dir
-from loading.preprocess import clean_text
+from loading.reprocess import clean_text 
 from chunking.chunker import chunk_documents
 from embedding.embedder import load_embedding_model, embed_texts
-from embedding.vectorstore import build_vectorstore, save_vectorstore
+from embedding.vectorstore import build_vectorstore
 
 
 def load_config(config_path):
@@ -75,7 +74,6 @@ def run_ingestion_pipeline(config_path):
     vector_db_dir.mkdir(parents=True, exist_ok=True)
 
     vectorstore = build_vectorstore(embeddings, chunks, vector_db_dir)
-    save_vectorstore(vectorstore, vector_db_dir)
     print(f"Vector store saved to: {vector_db_dir}")
 
     print(f"\n✓ Ingestion pipeline completed successfully!")
