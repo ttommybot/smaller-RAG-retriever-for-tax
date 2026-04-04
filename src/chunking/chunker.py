@@ -7,9 +7,11 @@
 2. 滑动窗口分块（sliding_window_chunking）：按固定字符数滑动窗口进行分块
 
 分块超参数从 configs/configs.yaml 读取。
+分块结果可保存到 data/processed 目录。
 """
 
-from typing import List, Dict, Any
+import json
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 import yaml
@@ -61,7 +63,9 @@ def _generate_chunk_id(file_type: str, file_name: str, chunk_index: int) -> str:
 def raw_data_semantic_chunking(
     documents: List[Dict[str, Any]],
     chunk_separator: str = "\n\n",
-    strip_whitespace: bool = True
+    strip_whitespace: bool = True,
+    save_to_file: bool = False,
+    output_file: str = "chunks_semantic.json"
 ) -> List[Dict[str, Any]]:
     """
     对文档列表进行原始语义分块（基于分隔符）。原文档是已经经过语义分块的文档。
@@ -79,6 +83,12 @@ def raw_data_semantic_chunking(
 
     strip_whitespace : bool, optional
         是否去除每个文本块前后的空白字符，默认为 True。
+
+    save_to_file : bool, optional
+        是否将结果保存到 data/processed 目录，默认为 False。
+
+    output_file : str, optional
+        输出文件名，默认为 "chunks_semantic.json"。
 
     返回
     -------
@@ -144,6 +154,11 @@ def raw_data_semantic_chunking(
             all_chunks.append(chunk_obj)
 
     print(f"语义分块完成！共生成 {len(all_chunks)} 个文本块")
+
+    # 保存文件
+    if save_to_file:
+        save_chunks(all_chunks, output_file)
+
     return all_chunks
 
 
@@ -152,7 +167,9 @@ def sliding_window_chunking(
     window_size: int,
     step_size: int,
     min_chunk: int,
-    strip_whitespace: bool = True
+    strip_whitespace: bool = True,
+    save_to_file: bool = False,
+    output_file: str = "chunks_sliding.json"
 ) -> List[Dict[str, Any]]:
     """
     对文档列表进行滑动窗口分块。
@@ -182,6 +199,12 @@ def sliding_window_chunking(
 
     strip_whitespace : bool, optional
         是否去除每个文本块前后的空白字符，默认为 True。
+
+    save_to_file : bool, optional
+        是否将结果保存到 data/processed 目录，默认为 False。
+
+    output_file : str, optional
+        输出文件名，默认为 "chunks_sliding.json"。
 
     返回
     -------
@@ -289,6 +312,11 @@ def sliding_window_chunking(
 
     print(f"滑动窗口分块完成！共生成 {len(all_chunks)} 个文本块 "
           f"(window_size={window_size}, step_size={step_size})")
+
+    # 保存文件
+    if save_to_file:
+        save_chunks(all_chunks, output_file)
+
     return all_chunks
 
 
@@ -308,6 +336,67 @@ def get_chunking_config() -> Dict[str, Any]:
         "chunk_overlap": chunking.get("chunk_overlap", 100),
         "min_chunk": chunking.get("min_chunk", 100)
     }
+
+
+def get_processed_data_dir() -> Path:
+    """
+    获取 processed_data 目录的路径。
+
+    从 configs/configs.yaml 的 paths.processed_data_dir 读取路径。
+    如果目录不存在则创建。
+
+    返回
+    ----
+    Path
+        processed_data 目录的 Path 对象。
+    """
+    config = _load_config()
+    processed_data_dir = config.get('paths', {}).get('processed_data_dir', 'data/processed')
+
+    # 获取项目根目录
+    current_dir = Path(__file__).parent
+    project_root = current_dir.parent.parent
+
+    dir_path = project_root / processed_data_dir
+
+    # 如果目录不存在则创建
+    dir_path.mkdir(parents=True, exist_ok=True)
+
+    return dir_path
+
+
+def save_chunks(
+    chunks: List[Dict[str, Any]],
+    output_file: str = "chunks.json",
+    save_dir: Optional[Path] = None
+) -> str:
+    """
+    将 chunk 列表保存为 JSON 文件。
+
+    参数
+    ----------
+    chunks : List[Dict[str, Any]]
+        由 chunker 生成的 chunk 列表。
+    output_file : str, optional
+        输出文件名，默认为 "chunks.json"。
+    save_dir : Optional[Path], optional
+        保存目录，默认为配置中的 processed_data_dir。
+
+    返回
+    -------
+    str
+        保存文件的完整路径。
+    """
+    if save_dir is None:
+        save_dir = get_processed_data_dir()
+
+    output_path = save_dir / output_file
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(chunks, f, ensure_ascii=False, indent=2)
+
+    print(f"Chunk 数据已保存到：{output_path}")
+    return str(output_path)
 
 
 if __name__ == "__main__":

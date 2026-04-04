@@ -6,18 +6,20 @@ paths:
   vector_db_dir: "vectordb"
 
 chunking:
-  chunk_size: 500
+  chunk_size: 300
   chunk_overlap: 100
   min_chunk: 100
 
 embedding:
-  model_name: "BAAI/bge-small-en-v1.5"
+  model_large_name: "BAAI/bge-large-zh-v1.5"
+  model_small_name: "sentence-transformers/all-MiniLM-L6-v2"
+  model_student_name: "sentence-transformers/all-MiniLM-L6-v2"
+  model_teacher_name: "BAAI/bge-reranker-v2-gemma"
 
 retrieval:
   top_k: 5
 
 models:
-  embedding_model_name: "sentence-transformers/all-MiniLM-L6-v2"
   generator_backend: "dummy"   # dummy / openai / ollama
   generator_model_name: "gpt-4o-mini"
 
