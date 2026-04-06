@@ -9,6 +9,7 @@
 - embed_query(): 单条 query 转向量
 
 模型配置从 configs/configs.yaml 读取。
+small/student 模型优先从本地 models 目录加载，large 模型从 HuggingFace 加载。
 """
 
 from typing import List, Dict, Any, Optional
@@ -36,12 +37,44 @@ def _load_config() -> Dict[str, Any]:
     Dict[str, Any]
         配置字典，包含 embedding 相关的模型名称。
     """
-    current_dir = Path(__file__).parent
-    project_root = current_dir.parent.parent
+    # 使用项目根目录作为参考点
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent.parent  # src/embedding -> project root
     config_path = project_root / "configs" / "configs.yaml"
 
     with open(config_path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
+
+
+# ==================== 本地模型路径 ====================
+
+def _get_local_model_path(model_name: str) -> Optional[Path]:
+    """
+    获取本地模型路径（如果存在）。
+
+    参数
+    ----------
+    model_name : str
+        模型名称，如 "sentence-transformers/all-MiniLM-L6-v2"。
+    save_dir : str
+        保存目录，默认为 "models"。
+
+    返回
+    -------
+    Optional[Path]
+        本地模型路径，如果不存在则返回 None。
+    """
+    # 使用绝对路径
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent.parent  # src/embedding -> project root
+    models_dir = project_root / "models"
+
+    # 将模型名称转换为目录名
+    local_model_dir = models_dir / model_name.replace("/", "--")
+
+    if local_model_dir.exists():
+        return local_model_dir
+    return None
 
 
 # ==================== Large 模型 ====================
@@ -125,6 +158,7 @@ def load_small_model() -> SentenceTransformer:
     加载 small 规模的 embedding 模型。
 
     模型名称从 configs 的 embedding.model_small_name 读取。
+    优先从本地 models 目录加载，如果不存在则从 HuggingFace 下载。
     使用单例模式，首次调用时加载，后续调用返回缓存的模型。
 
     返回
@@ -138,7 +172,16 @@ def load_small_model() -> SentenceTransformer:
         config = _load_config()
         model_name = config.get('embedding', {}).get('model_small_name', 'sentence-transformers/all-MiniLM-L6-v2')
         print(f"正在加载 small 模型：{model_name}")
-        _small_model = SentenceTransformer(model_name)
+
+        # 尝试从本地加载
+        local_model_path = _get_local_model_path(model_name)
+        if local_model_path and local_model_path.exists():
+            print(f"从本地加载模型：{local_model_path}")
+            _small_model = SentenceTransformer(str(local_model_path))
+        else:
+            print(f"本地未找到模型，从 HuggingFace 下载：{model_name}")
+            _small_model = SentenceTransformer(model_name)
+
         print(f"Small 模型加载完成")
 
     return _small_model
@@ -195,6 +238,7 @@ def load_student_model() -> SentenceTransformer:
     加载 student 规模的 embedding 模型。
 
     模型名称从 configs 的 embedding.model_student_name 读取。
+    优先从本地 models 目录加载，如果不存在则从 HuggingFace 下载。
     使用单例模式，首次调用时加载，后续调用返回缓存的模型。
 
     返回
@@ -208,7 +252,16 @@ def load_student_model() -> SentenceTransformer:
         config = _load_config()
         model_name = config.get('embedding', {}).get('model_student_name', 'sentence-transformers/all-MiniLM-L6-v2')
         print(f"正在加载 student 模型：{model_name}")
-        _student_model = SentenceTransformer(model_name)
+
+        # 尝试从本地加载
+        local_model_path = _get_local_model_path(model_name)
+        if local_model_path and local_model_path.exists():
+            print(f"从本地加载模型：{local_model_path}")
+            _student_model = SentenceTransformer(str(local_model_path))
+        else:
+            print(f"本地未找到模型，从 HuggingFace 下载：{model_name}")
+            _student_model = SentenceTransformer(model_name)
+
         print(f"Student 模型加载完成")
 
     return _student_model

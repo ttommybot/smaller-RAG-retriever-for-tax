@@ -1,7 +1,9 @@
-# RAG for Tax 项目配置文件
+# RAG for Tax 项目配置文件（模板）
 #
-# 注意：敏感信息（如 API key）已移至 configs_local.yaml 文件
-# 该文件可以安全提交到 Git
+# 使用说明：
+# 1. 复制本文件为 configs.yaml 或保留为模板参考
+# 2. 敏感信息（如 API key）请放入 configs_local.yaml 文件中
+# 3. configs_local.yaml 不会被提交到 Git
 
 project_name: "rag_for_tax"
 
@@ -29,7 +31,8 @@ models:
   generator_backend: "huggingface"
   # 生成器模型名称
   generator_model_name: "Qwen/Qwen2.5-7B-Instruct"
-  # HuggingFace API Key 已在 configs_local.yaml 中配置
+  # HuggingFace API Key（留空，请在 configs_local.yaml 中填写）
+  huggingface_api_key: ""
 
 app:
   show_sources: true
