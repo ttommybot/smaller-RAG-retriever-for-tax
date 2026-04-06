@@ -1,12 +1,20 @@
-import yaml
-from pipeline.rag_pipeline import run_rag_pipeline
+# -*- coding: utf-8 -*-
+"""
+应用主入口模块
 
+提供交互式查询界面，运行完整的 RAG 查询流水线。
+"""
 
-def load_config(config_path):
-    """Load configuration from YAML file"""
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
-    return config
+from typing import Dict, Optional
+import sys
+from pathlib import Path
+
+# 添加 src 目录到导入路径
+current_dir = Path(__file__).parent
+sys.path.insert(0, str(current_dir))
+
+from pipeline.rag_pipeline import run_rag_pipeline, RAGResult
+from utils.config_loader import load_config
 
 
 def main():
@@ -22,6 +30,7 @@ def main():
     print(f"Project: {config['project_name']}")
     print(f"Show sources: {config['app']['show_sources']}")
     print(f"Top-k retrieval: {config['retrieval']['top_k']}")
+    print(f"Generator backend: {config['models']['generator_backend']}")
     print("=" * 50)
     print("Type 'quit', 'exit', or 'q' to exit\n")
 
@@ -38,7 +47,7 @@ def main():
 
             # Run RAG pipeline
             print("\nProcessing your query...")
-            result = run_rag_pipeline(query, config_path)
+            result: RAGResult = run_rag_pipeline(query, config_path)
 
             # Display answer
             print(f"\nAnswer:\n{result['answer']}")

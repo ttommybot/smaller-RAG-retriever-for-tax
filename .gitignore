@@ -19,6 +19,10 @@ Thumbs.db
 
 # Environment variables
 .env
+*.env
+
+# Local config (contains API keys)
+configs/configs_local.yaml
 
 # Data
 data/raw/*
@@ -29,6 +33,10 @@ data/processed/*
 # Vector database
 vectordb/*
 !vectordb/.gitkeep
+
+# Models (large files, cache only)
+models/*
+!models/.gitkeep
 
 # Logs
 *.log

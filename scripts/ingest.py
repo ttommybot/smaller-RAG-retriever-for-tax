@@ -15,24 +15,30 @@
 """
 
 import sys
+import json
+import pickle
 from pathlib import Path
+from typing import Optional, cast
+
+import numpy as np
+import yaml
 
 # 获取项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from loading.loader import load_documents_from_dir
-from chunking.chunker import sliding_window_chunking, get_chunking_config
+from chunking.chunker import sliding_window_chunking, get_chunking_config, raw_data_semantic_chunking
 from chunking.preprocess import preprocess_chunks
 from embedding.embedder import get_embedder
 
 
 def ingest(
-    data_dir: str = None,
+    data_dir: Optional[str] = None,
     chunking_strategy: str = "sliding_window",
     model_type: str = "large",
     batch_size: int = 32,
-    save_path: str = None
+    save_path: Optional[str] = None
 ):
     """
     执行完整的 RAG 数据入库流程。
@@ -50,8 +56,6 @@ def ingest(
     save_path : str, optional
         向量数据库保存路径，默认为配置中的 vector_db_dir。
     """
-    import yaml
-
     # 加载配置
     config_path = PROJECT_ROOT / "configs" / "configs.yaml"
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -62,6 +66,10 @@ def ingest(
         data_dir = config.get('paths', {}).get('raw_data_dir', 'data/raw')
     if save_path is None:
         save_path = config.get('paths', {}).get('vector_db_dir', 'vectordb')
+
+    # 类型断言：此时 data_dir 和 save_path 一定不为 None
+    data_dir = cast(str, data_dir)
+    save_path = cast(str, save_path)
 
     print("=" * 60)
     print("RAG 数据入库流程")
@@ -99,7 +107,6 @@ def ingest(
             min_chunk=chunk_config['min_chunk']
         )
     elif chunking_strategy == "semantic":
-        from chunking.chunker import raw_data_semantic_chunking
         chunks = raw_data_semantic_chunking(documents)
     else:
         raise ValueError(f"未知的分块策略：{chunking_strategy}")
@@ -139,7 +146,6 @@ def ingest(
         embeddings = embedder['embed_texts'](batch_texts, normalize=True)
         all_embeddings.append(embeddings)
 
-    import numpy as np
     all_embeddings = np.vstack(all_embeddings)
     print(f"Embedding 生成完成！形状：{all_embeddings.shape}")
 
@@ -153,8 +159,6 @@ def ingest(
     vector_db_path.mkdir(parents=True, exist_ok=True)
 
     # 保存向量和元数据
-    import pickle
-
     # 保存向量
     embeddings_path = vector_db_path / f"embeddings_{model_type}.npy"
     np.save(embeddings_path, all_embeddings)
@@ -176,7 +180,6 @@ def ingest(
         'data_dir': data_dir
     }
     info_path = vector_db_path / f"info_{model_type}.json"
-    import json
     with open(info_path, 'w', encoding='utf-8') as f:
         json.dump(info, f, ensure_ascii=False, indent=2)
     print(f"配置信息已保存：{info_path}")

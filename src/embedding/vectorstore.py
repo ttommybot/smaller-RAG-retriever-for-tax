@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import numpy as np
 
-from embedder import get_embedder, _load_config
+from .embedder import get_embedder, _load_config
 
 
 # ==================== 向量库目录管理 ====================
@@ -32,14 +32,17 @@ def get_vectorstore_dir() -> Path:
     Path
         向量库目录的 Path 对象。
     """
+    # 使用绝对路径确保正确
+    # current_file: src/embedding/vectorstore.py
+    # parent: src/embedding
+    # parent.parent: src
+    # parent.parent.parent: project root
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent.parent  # 3 级父目录 = 项目根目录
     config = _load_config()
     vector_db_dir = config.get('paths', {}).get('vector_db_dir', 'vectordb')
 
-    current_dir = Path(__file__).parent
-    project_root = current_dir.parent.parent
-    dir_path = project_root / vector_db_dir
-
-    return dir_path
+    return project_root / vector_db_dir
 
 
 # ==================== 构建向量库 ====================
