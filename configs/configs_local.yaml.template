@@ -1,0 +1,47 @@
+# RAG for Tax 项目本地配置文件（模板）
+#
+# 重要：此文件包含敏感信息（如 API key），不会被提交到 Git
+# 请妥善保管，不要分享给他人
+#
+# 使用说明：
+# 1. 复制此文件为 configs_local.yaml
+# 2. 填写您的 API key
+# 3. 不要将 configs_local.yaml 提交到 Git
+
+# ==================== 生成器配置 ====================
+models:
+  # 生成器后端：dummy / aliyun / huggingface
+  generator_backend: "aliyun"
+  # 阿里云千问模型名称
+  generator_model_name: "qwen-max"
+  # 阿里云 DashScope API Key
+  aliyun_dashscope_api_key: "sk-your-api-key-here"
+
+# ==================== 问题集生成 API 配置 ====================
+api:
+  # 问题生成 API URL（CloseAI / DeepSeek）
+  generation_url: "https://api.closeai-asia.com/v1/chat/completions"
+  # 问题生成 API Key
+  generation_api_key: "sk-your-generation-api-key-here"
+  # 生成模型名称
+  generation_model: "deepseek-chat"
+
+# ==================== 问题集生成配置 ====================
+query:
+  # 种子问题文件（clean.py 输入）
+  seed_file: "data/query/seed_questions_cleaned.txt"
+  # 原始问题文件（clean.py 输入）
+  input_file: "seed_questions.txt"
+  # 干净问题文件（clean.py 输出）
+  output_file: "data/query/seed_questions_cleaned.txt"
+  # 输出目录（generate_dataset.py 输出）
+  output_dir: "data/query"
+  # 每条种子生成的问题数量
+  generate_per_seed: 6
+  # 并发限制
+  concurrent_limit: 15
+  # 数据集规模定义
+  dataset_sizes:
+    small: 200
+    medium: 500
+    large: 1000

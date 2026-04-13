@@ -8,13 +8,20 @@
 from typing import Dict, Optional
 import sys
 from pathlib import Path
+import io
 
-# 添加 src 目录到导入路径
+# 设置标准输入使用 UTF-8 编码（防止 Windows 控制台 GBK 编码问题）
+if sys.platform == 'win32' and hasattr(sys.stdin, 'buffer'):
+    sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
+
+# 添加项目根目录到导入路径
 current_dir = Path(__file__).parent
-sys.path.insert(0, str(current_dir))
+project_root = current_dir.parent.parent
+sys.path.insert(0, str(project_root))
 
-from pipeline.rag_pipeline import run_rag_pipeline, RAGResult
-from utils.config_loader import load_config
+# 显式导入模块而不是 from 导入
+import src.pipeline.rag_pipeline as rag_pipeline
+import src.utils.config_loader as config_loader
 
 
 def main():
@@ -22,7 +29,7 @@ def main():
     config_path = "configs/configs.yaml"
 
     # Load configuration
-    config = load_config(config_path)
+    config = config_loader.load_config(config_path)
 
     print("=" * 50)
     print("RAG Tax Query System")
@@ -31,6 +38,7 @@ def main():
     print(f"Show sources: {config['app']['show_sources']}")
     print(f"Top-k retrieval: {config['retrieval']['top_k']}")
     print(f"Generator backend: {config['models']['generator_backend']}")
+    print(f"Model type: small")
     print("=" * 50)
     print("Type 'quit', 'exit', or 'q' to exit\n")
 
@@ -47,7 +55,7 @@ def main():
 
             # Run RAG pipeline
             print("\nProcessing your query...")
-            result: RAGResult = run_rag_pipeline(query, config_path)
+            result = rag_pipeline.run_rag_pipeline(query, config_path, model_type="small")
 
             # Display answer
             print(f"\nAnswer:\n{result['answer']}")
@@ -64,7 +72,9 @@ def main():
             print("\n\nInterrupted by user. Exiting...")
             break
         except Exception as e:
+            import traceback
             print(f"\nError: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
             print("Please try again or type 'quit' to exit.\n")
 
 
