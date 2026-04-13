@@ -204,6 +204,8 @@ def embed_texts_small(texts: List[str], normalize: bool = True) -> np.ndarray:
         形状为 (n_texts, embedding_dim) 的向量矩阵。
     """
     model = load_small_model()
+    # 确保所有输入都是字符串
+    texts = [str(t) for t in texts if t is not None]
     embeddings = model.encode(texts, normalize_embeddings=normalize)
     return embeddings
 
@@ -224,7 +226,7 @@ def embed_query_small(text: str, normalize: bool = True) -> np.ndarray:
     np.ndarray
         形状为 (embedding_dim,) 的向量。
     """
-    embeddings = embed_texts_small([text], normalize=normalize)
+    embeddings = embed_texts_small([str(text)], normalize=normalize)
     return embeddings[0]
 
 

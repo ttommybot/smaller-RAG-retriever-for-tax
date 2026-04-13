@@ -29,6 +29,8 @@ data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+data/query/*
+!data/query/.gitkeep
 
 # Vector database
 vectordb/*

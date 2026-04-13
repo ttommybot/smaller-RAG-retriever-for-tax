@@ -279,7 +279,8 @@ def search(
     model_type = vectorstore.get('model_type', 'large')
     embedder = get_embedder(model_type)
 
-    # 生成查询向量
+    # 确保查询是字符串并生成查询向量
+    query = str(query).strip()
     query_vector = embedder['embed_query'](query, normalize=True)
     query_vector = query_vector.reshape(1, -1)
 

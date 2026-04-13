@@ -36,3 +36,23 @@ models:
 
 app:
   show_sources: true
+
+# 问题集生成配置（非敏感项）
+query:
+  # 种子问题文件（clean.py 输入）
+  seed_file: "data/query/seed_questions_cleaned.txt"
+  # 原始问题文件（clean.py 输入）
+  input_file: "seed_questions.txt"
+  # 干净问题文件（clean.py 输出）
+  output_file: "data/query/seed_questions_cleaned.txt"
+  # 输出目录（generate_dataset.py 输出）
+  output_dir: "data/query"
+  # 每条种子生成的问题数量
+  generate_per_seed: 6
+  # 并发限制
+  concurrent_limit: 15
+  # 数据集规模定义
+  dataset_sizes:
+    small: 200
+    medium: 500
+    large: 1000
