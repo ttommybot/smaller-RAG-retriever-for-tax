@@ -202,7 +202,9 @@ def preprocess_chunks(
     normalize_fullwidth: bool = True,
     normalize_punctuation: bool = True,
     normalize_numbers: bool = False,
-    normalize_dates: bool = True
+    normalize_dates: bool = True,
+    save_to_file: bool = False,
+    output_file: str = "chunks_cleaned.json"
 ) -> List[Dict[str, Any]]:
     """
     对 chunk 列表进行预处理。
@@ -243,20 +245,26 @@ def preprocess_chunks(
         是否标准化日期格式，默认为 True。
         将各种日期格式统一为 YYYY 年 MM 月 DD 日。
 
+    save_to_file : bool, optional
+        是否保存结果到 data/processed 目录，默认为 False。
+
+    output_file : str, optional
+        输出文件名，默认为 "chunks_cleaned.json"。
+
     返回
     -------
     List[Dict[str, Any]]
         经过预处理后的 chunk 列表，格式与原格式相同。
-
-    示例
-    ----
-    >>> from src.chunking.chunker import sliding_window_chunking
-    >>> from src.chunking.preprocess import preprocess_chunks
-    >>>
-    >>> chunks = sliding_window_chunking(documents, window_size=500, step_size=400)
-    >>> clean_chunks = preprocess_chunks(chunks, min_chunk_length=20)
-    >>> print(f"原始：{len(chunks)} 个块，清洗后：{len(clean_chunks)} 个块")
     """
+    import json
+    from pathlib import Path
+
+    # 获取 processed_data 目录
+    def get_processed_data_dir() -> Path:
+        current_dir = Path(__file__).parent
+        project_root = current_dir.parent.parent
+        return project_root / "data" / "processed"
+
     processed_chunks = []
 
     for chunk in chunks:
@@ -298,6 +306,17 @@ def preprocess_chunks(
         processed_chunks.append(chunk_copy)
 
     print(f"预处理完成！原始：{len(chunks)} 个块 → 清洗后：{len(processed_chunks)} 个块")
+
+    # 保存到文件
+    if save_to_file:
+        save_dir = get_processed_data_dir()
+        save_dir.mkdir(parents=True, exist_ok=True)
+        output_path = save_dir / output_file
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(processed_chunks, f, ensure_ascii=False, indent=2)
+        print(f"预处理结果已保存到：{output_path}")
+
     return processed_chunks
 
 

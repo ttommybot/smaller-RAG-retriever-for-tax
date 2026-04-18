@@ -17,6 +17,36 @@ from pathlib import Path
 import yaml
 
 
+# 项目根目录（用于转换相对路径）
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+
+def _to_relative_path(file_path: str) -> str:
+    """
+    将绝对路径转换为相对于项目根目录的相对路径。
+
+    参数
+    ----------
+    file_path : str
+        文件的绝对路径。
+
+    返回
+    -------
+    str
+        相对路径，如 "data/raw/文件.docx"。
+    """
+    if not file_path:
+        return ""
+
+    path = Path(file_path)
+    try:
+        relative = path.relative_to(PROJECT_ROOT)
+        return str(relative)
+    except ValueError:
+        # 如果路径不在项目根目录下，返回原路径
+        return file_path
+
+
 def _load_config() -> Dict[str, Any]:
     """
     从 configs/configs.yaml 加载配置。
@@ -125,6 +155,9 @@ def raw_data_semantic_chunking(
         file_name = doc.get("file_name", "未知")
         file_path = doc.get("file_path", "")
 
+        # 转换为相对路径
+        relative_path = _to_relative_path(file_path)
+
         # 按分隔符切分
         raw_chunks = full_text.split(chunk_separator)
 
@@ -148,7 +181,7 @@ def raw_data_semantic_chunking(
                     "file_type": file_type,
                     "chunk_index": chunk_idx,
                     "total_chunks": total_chunks,
-                    "file_path": file_path
+                    "file_path": relative_path
                 }
             }
             all_chunks.append(chunk_obj)
@@ -249,6 +282,9 @@ def sliding_window_chunking(
         file_name = doc.get("file_name", "未知")
         file_path = doc.get("file_path", "")
 
+        # 转换为相对路径
+        relative_path = _to_relative_path(file_path)
+
         text_length = len(full_text)
         chunks = []
         start_pos = 0
@@ -303,7 +339,7 @@ def sliding_window_chunking(
                     "file_type": file_type,
                     "chunk_index": i,
                     "total_chunks": total_chunks,
-                    "file_path": file_path,
+                    "file_path": relative_path,
                     "start_char": chunk_data["start_char"],
                     "end_char": chunk_data["end_char"]
                 }

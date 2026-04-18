@@ -15,11 +15,15 @@ rag_for_tax/
 │   ├── configs_local.yaml.template # 本地配置模板
 │   └── README.md             # 配置说明
 ├── models/
-│   └── sentence-transformers--all-MiniLM-L6-v2/  # 本地 Embedding 模型
+│   ├── sentence-transformers--all-MiniLM-L6-v2/  # MiniLM 小型嵌入模型
+│   ├── BAAI--bge-large-zh-v1.5/                  # BGE 大型中文嵌入模型
+│   ├── BAAI--bge-reranker-v2-gemma/              # BGE 重排序模型
+│   └── README.md                                 # 模型目录说明
 ├── scripts/
-│   ├── ingest.py             # 数据入库脚本
-│   ├── query_demo.py         # 查询演示脚本
-│   └── download_models.py    # 模型下载脚本
+│   ├── chunk_to_processed.py # 文档分块脚本（loading -> chunking -> preprocessing）
+│   ├── embed_to_vectordb.py  # 向量化入库脚本（embedding -> vectorstore）
+│   ├── download_models.py    # 模型下载脚本
+│   └── query_demo.py         # 查询演示脚本
 ├── src/
 │   ├── app/
 │   │   └── main.py           # 应用主入口（命令行交互式查询界面）
@@ -30,7 +34,7 @@ rag_for_tax/
 │   ├── embedding/
 │   │   ├── embedder.py       # 文本嵌入模块
 │   │   ├── vectorstore.py    # 向量数据库模块
-│   │   └── test_embedding.py # 嵌入测试脚本
+│   │   └── test_embedding.py # 嵌入测试脚本（支持 full/bge 模式）
 │   ├── generation/
 │   │   ├── generator.py      # 答案生成模块（支持阿里云/钉钉）
 │   │   └── prompt_builder.py # 提示词构建模块
@@ -50,7 +54,8 @@ rag_for_tax/
 │   │   ├── clean.py           # 问题清洗模块
 │   │   └── generate_dataset.py # 问题数据集生成模块
 │   ├── retrieval/
-│   │   └── retriever.py      # 检索模块 (使用向量库)
+│   │   ├── retriever.py      # 检索模块（基于向量库）
+│   │   └── test_retriever.py # 检索测试脚本
 │   └── utils/
 │       ├── __init__.py       # 工具包初始化
 │       └── config_loader.py  # 配置加载工具
@@ -118,11 +123,48 @@ api:
 
 ## 二、SCRIPTS 目录
 
-### scripts/ingest.py - 数据入库脚本
+### scripts/chunk_to_processed.py - 文档分块脚本
+
+**执行分块流程**：loading -> chunking -> preprocessing，输出两种分块方法的 cleaned JSON 文件到 data/processed。
 
 | 函数 | 作用 | 输入 | 输出 |
 |------|------|------|------|
-| `ingest()` | 执行完整 RAG 数据入库流程 | `data_dir`: str, optional<br>`chunking_strategy`: str, optional<br>`model_type`: str, optional<br>`batch_size`: int, optional<br>`save_path`: str, optional | None |
+| `chunk_to_processed()` | 执行完整分块流程 | `data_dir`: str, optional | None |
+
+**输出文件**:
+- `data/processed/chunks_semantic.json` - 语义分块原始结果
+- `data/processed/chunks_semantic_cleaned.json` - 语义分块清洗后结果
+- `data/processed/chunks_sliding.json` - 滑动窗口分块原始结果
+- `data/processed/chunks_sliding_cleaned.json` - 滑动窗口分块清洗后结果
+
+**使用示例**:
+```bash
+# 使用默认配置
+python scripts/chunk_to_processed.py
+```
+
+---
+
+### scripts/embed_to_vectordb.py - 向量化入库脚本
+
+**执行向量化流程**：从 data/processed 读取 cleaned JSON，进行 embedding 并存入向量库。
+
+| 函数 | 作用 | 输入 | 输出 |
+|------|------|------|------|
+| `embed_to_vectordb()` | 执行向量化入库流程 | `chunk_method`: str<br>`model_type`: str<br>`batch_size`: int<br>`save_path`: str, optional | None |
+
+**支持 6 种组合**：2 种 chunk_method × 3 种 model_type
+- `chunk_method`: 'semantic' 或 'sliding_window'
+- `model_type`: 'large'、'small'、'student'
+
+**使用示例**:
+```bash
+# 使用 large 模型 + semantic 分块
+python scripts/embed_to_vectordb.py --model large --chunk-method semantic
+
+# 使用 small 模型 + sliding_window 分块
+python scripts/embed_to_vectordb.py --model small --chunk-method sliding_window
+```
 
 ---
 
@@ -219,22 +261,63 @@ api:
 
 ### src/embedding/embedder.py - 文本嵌入模块
 
-**模型加载策略**: small/student 模型优先从本地 `models/` 目录加载。
+**模型加载策略**: small/student 模型优先从本地 `models/` 目录加载，large 模型从 HuggingFace 加载。
 
 | 函数 | 作用 | 输入 | 输出 |
 |------|------|------|------|
-| `get_embedder()` | 获取指定模型的 embedder 接口 | `model_type`: str | Dict[str, Callable] |
+| `get_embedder()` | 获取指定模型的 embedder 接口 | `model_type`: str ('large', 'small', 'student') | Dict[str, Callable] |
+| `load_large_model()` | 加载 large 模型（BGE-large-zh） | None | SentenceTransformer |
 | `load_small_model()` | 加载 small 模型（本地优先） | None | SentenceTransformer |
+| `load_student_model()` | 加载 student 模型（本地优先） | None | SentenceTransformer |
+| `embed_texts_large/small/student()` | 批量文本转向量 | `texts`: List[str], `normalize`: bool | np.ndarray |
+| `embed_query_large/small/student()` | 单条 query 转向量 | `text`: str, `normalize`: bool | np.ndarray |
+
+**支持的模型**:
+- **large**: BAAI/bge-large-zh-v1.5（约 1.2GB，1024 维向量，默认）
+- **small**: sentence-transformers/all-MiniLM-L6-v2（约 80MB，384 维向量）
+- **student**: sentence-transformers/all-MiniLM-L6-v2（约 80MB，384 维向量）
 
 ---
 
 ### src/embedding/vectorstore.py - 向量数据库模块
 
+**六种组合方案** (chunk_method × model_type):
+| 分块方法 | 模型类型 | 向量维度 | 特点 |
+|----------|----------|----------|------|
+| semantic | large | 1024 | 默认推荐，语义分块 + 高质量检索 |
+| semantic | small | 384 | 语义分块 + 平衡性能 |
+| semantic | student | 384 | 语义分块 + 快速推理 |
+| sliding_window | large | 1024 | 滑动窗口 + 高质量检索 |
+| sliding_window | small | 384 | 滑动窗口 + 平衡性能 |
+| sliding_window | student | 384 | 滑动窗口 + 快速推理 |
+
 | 函数 | 作用 | 输入 | 输出 |
 |------|------|------|------|
-| `build_vectorstore()` | 从 chunk 列表构建向量库 | `chunks`: List[Dict]<br>`model_type`: str | Dict |
-| `load_vectorstore()` | 从磁盘加载向量库 | `model_type`: str | Dict |
-| `search()` | 基于查询文本检索相似 chunk | `query`: str<br>`vectorstore`: Dict<br>`top_k`: int | List[Tuple[Dict, float]] |
+| `build_vectorstore()` | 构建单套向量库 | `chunks`: List[Dict]<br>`chunk_method`: str<br>`model_type`: str | Dict |
+| `build_all_vectorstores()` | 构建全部 6 套向量库 | `chunks_semantic`, `chunks_sliding` | Dict[str, Dict] |
+| `load_vectorstore()` | 加载单套向量库 | `chunk_method`: str<br>`model_type`: str | Dict |
+| `load_all_vectorstores()` | 加载全部 6 套向量库 | - | Dict[str, Dict] |
+| `search()` | 检索相似 chunk | `query`: str<br>`vectorstore`: Dict<br>`top_k`: int | List[Tuple] |
+| `search_from_config()` | 便捷检索 | `query`: str<br>`chunk_method`: str<br>`model_type`: str | List[Tuple] |
+| `get_searcher()` | 获取检索器接口 | `chunk_method`: str<br>`model_type`: str | Dict |
+
+**向量库文件命名**: `embeddings_{chunk_method}_{model_type}.npy`
+
+---
+
+### src/retrieval/retriever.py - 检索模块
+
+**六种组合方案**: semantic/sliding_window × large/small/student
+
+| 函数 | 作用 | 输入 | 输出 |
+|------|------|------|------|
+| `retrieve_top_k()` | 检索 Top-K 文档 | `query`: str, `top_k`: int<br>`chunk_method`: str, `model_type`: str | List[Dict] |
+| `retrieve_quick()` | 便捷检索 | `query`: str<br>`chunk_method`: str, `model_type`: str | List[Dict] |
+| `format_retrieved_context()` | 格式化为上下文 | `retrieved_docs`: List[Dict] | str |
+| `get_retriever()` | 获取检索器接口 | `chunk_method`: str, `model_type`: str | Dict |
+| `get_all_retrievers()` | 获取全部 6 套检索器 | - | Dict[str, Dict] |
+
+**默认配置**: `chunk_method='semantic'`, `model_type='large'`
 
 ---
 
@@ -350,28 +433,51 @@ api:
 ## 四、数据流向图
 
 ```
-入库流程:
+入库流程（两步执行）:
+
+步骤 1 - 分块到 processed:
 原始文档 (data/raw/*.docx)
         ↓
-[loading/loader.py] load_documents_from_dir()
+[scripts/chunk_to_processed.py]
         ↓
-文档列表 [{full_text, file_name, file_type, ...}]
+┌───────────────────────────────────┐
+│ loading: load_documents_from_dir()│
+│        ↓                          │
+│ chunking: 两种分块方法             │
+│   - semantic (分隔符分块)          │
+│   - sliding_window (固定大小)      │
+│        ↓                          │
+│ preprocessing: preprocess_chunks() │
+│   - 全角转半角                     │
+│   - 标点标准化                     │
+│   - 日期标准化                     │
+│   - 去除短块                       │
+└───────────────────────────────────┘
         ↓
-[chunking/chunker.py] sliding_window_chunking()
+JSON 文件 (data/processed/):
+  - chunks_semantic_cleaned.json
+  - chunks_sliding_cleaned.json
+
+步骤 2 - 向量化入库:
+JSON 文件 (data/processed/*_cleaned.json)
         ↓
-Chunk 列表 [{id, content, metadata}]
+[scripts/embed_to_vectordb.py]
         ↓
-[chunking/preprocess.py] preprocess_chunks()
+┌───────────────────────────────────┐
+│ embedding: 6 种组合可选             │
+│   chunk_method: semantic/sliding  │
+│   model_type: large/small/student │
+│        ↓                          │
+│ vectorstore: build_vectorstore()  │
+└───────────────────────────────────┘
         ↓
-清洗后 Chunk 列表
-        ↓
-[embedding/embedder.py] get_embedder('small')['embed_texts']()
-        ↓
-向量矩阵 (n_chunks, embedding_dim)
-        ↓
-[embedding/vectorstore.py] build_vectorstore()
-        ↓
-向量数据库 (vectordb/)
+向量数据库 (vectordb/):
+  - embeddings_semantic_large.npy
+  - embeddings_semantic_small.npy
+  - embeddings_semantic_student.npy
+  - embeddings_sliding_large.npy
+  - embeddings_sliding_small.npy
+  - embeddings_sliding_student.npy
 
 查询流程:
 用户查询
@@ -437,8 +543,15 @@ python src/query/generate_dataset.py
 ```
 
 ### 5. 向量化知识库
+
 ```bash
-python scripts/ingest.py --model small
+# 步骤 1: 分块（两种方法，输出到 data/processed）
+python scripts/chunk_to_processed.py
+
+# 步骤 2: 向量化入库（每次一个模型）
+python scripts/embed_to_vectordb.py --model large --chunk-method semantic
+python scripts/embed_to_vectordb.py --model small --chunk-method semantic
+python scripts/embed_to_vectordb.py --model student --chunk-method semantic
 ```
 
 ### 6. 运行查询
