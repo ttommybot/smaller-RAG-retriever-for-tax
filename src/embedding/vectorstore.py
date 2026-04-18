@@ -3,11 +3,20 @@
 向量数据库模块
 
 本模块提供向量库的构建、加载和检索功能。
-- build_vectorstore(): 从原始文档构建向量库
-- load_vectorstore(): 从磁盘加载向量库
-- search(): 基于查询向量检索相似文档
 
-向量库存储在 vectordb 目录下。
+六种组合方案 (chunk_method × model_type):
+- chunk_method: 'semantic' | 'sliding_window' (2 种)
+- model_type: 'large' | 'small' | 'student' (3 种)
+
+组合结果 (6 种):
+1. semantic + large      (默认推荐)
+2. semantic + small
+3. semantic + student
+4. sliding_window + large
+5. sliding_window + small
+6. sliding_window + student
+
+每套向量独立存储，文件名格式：{chunk_method}_{model_type}.*
 """
 
 import json
@@ -25,20 +34,13 @@ def get_vectorstore_dir() -> Path:
     """
     获取向量库存储目录。
 
-    从 configs/configs.yaml 的 paths.vector_db_dir 读取路径。
-
     返回
     ----
     Path
         向量库目录的 Path 对象。
     """
-    # 使用绝对路径确保正确
-    # current_file: src/embedding/vectorstore.py
-    # parent: src/embedding
-    # parent.parent: src
-    # parent.parent.parent: project root
     current_file = Path(__file__).resolve()
-    project_root = current_file.parent.parent.parent  # 3 级父目录 = 项目根目录
+    project_root = current_file.parent.parent.parent
     config = _load_config()
     vector_db_dir = config.get('paths', {}).get('vector_db_dir', 'vectordb')
 
@@ -49,6 +51,7 @@ def get_vectorstore_dir() -> Path:
 
 def build_vectorstore(
     chunks: List[Dict[str, Any]],
+    chunk_method: str = "semantic",
     model_type: str = "large",
     batch_size: int = 32,
     save_path: Optional[str] = None
@@ -56,16 +59,19 @@ def build_vectorstore(
     """
     从 chunk 列表构建向量库。
 
-    使用指定的 embedding 模型将文本块转换为向量，并保存到 vectordb 目录。
-
     参数
     ----------
     chunks : List[Dict[str, Any]]
-        由 chunker 和 preprocess 处理后的 chunk 列表。
-        每个 chunk 应包含 'id'、'content' 和 'metadata' 字段。
+        由 chunker 处理后的 chunk 列表。
+
+    chunk_method : str, optional
+        分块方法，可选 'semantic' | 'sliding_window'，默认为 'semantic'。
 
     model_type : str, optional
-        embedding 模型类型，可选 'large'、'small'、'student'，默认为 'large'。
+        embedding 模型类型，可选 'large' | 'small' | 'student'，默认为 'large'。
+        - 'large': BGE-large-zh-v1.5, 1024 维，高质量检索（默认）
+        - 'small': all-MiniLM-L6-v2, 384 维，平衡性能
+        - 'student': all-MiniLM-L6-v2, 384 维，快速推理
 
     batch_size : int, optional
         embedding 批量大小，默认为 32。
@@ -76,19 +82,20 @@ def build_vectorstore(
     返回
     -------
     Dict[str, Any]
-        向量库信息，包括：
-        - 'embeddings': np.ndarray, 向量矩阵
-        - 'chunks': List[Dict], chunk 元数据列表
-        - 'model_type': str, 使用的模型类型
-        - 'embedding_dim': int, 向量维度
+        向量库信息。
     """
     print("=" * 60)
     print("构建向量库")
     print("=" * 60)
 
+    # 验证参数
+    if chunk_method not in ['semantic', 'sliding_window']:
+        raise ValueError(f"不支持的分块方法：{chunk_method}，可选值：['semantic', 'sliding_window']")
+    if model_type not in ['large', 'small', 'student']:
+        raise ValueError(f"不支持的模型类型：{model_type}，可选值：['large', 'small', 'student']")
+
     # 获取 embedder
     embedder = get_embedder(model_type)
-    model = embedder['load']()
 
     # 提取文本内容
     texts = [chunk['content'] for chunk in chunks]
@@ -97,7 +104,7 @@ def build_vectorstore(
     all_embeddings = []
     total_batches = (len(texts) + batch_size - 1) // batch_size
 
-    print(f"\n开始生成 embedding，共 {len(texts)} 个文本块...")
+    print(f"\n开始生成 embedding ({chunk_method} + {model_type})，共 {len(texts)} 个文本块...")
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i:i + batch_size]
         batch_num = i // batch_size + 1
@@ -118,24 +125,26 @@ def build_vectorstore(
     save_dir.mkdir(parents=True, exist_ok=True)
 
     # 保存向量
-    embeddings_path = save_dir / f"embeddings_{model_type}.npy"
+    prefix = f"{chunk_method}_{model_type}"
+    embeddings_path = save_dir / f"embeddings_{prefix}.npy"
     np.save(embeddings_path, all_embeddings)
     print(f"向量已保存：{embeddings_path}")
 
     # 保存 chunk 元数据
-    metadata_path = save_dir / f"metadata_{model_type}.pkl"
+    metadata_path = save_dir / f"metadata_{prefix}.pkl"
     with open(metadata_path, 'wb') as f:
         pickle.dump(chunks, f)
     print(f"元数据已保存：{metadata_path}")
 
     # 保存配置信息
     info = {
+        'chunk_method': chunk_method,
         'model_type': model_type,
         'num_chunks': len(chunks),
         'embedding_dim': all_embeddings.shape[1],
         'batch_size': batch_size
     }
-    info_path = save_dir / f"info_{model_type}.json"
+    info_path = save_dir / f"info_{prefix}.json"
     with open(info_path, 'w', encoding='utf-8') as f:
         json.dump(info, f, ensure_ascii=False, indent=2)
     print(f"配置信息已保存：{info_path}")
@@ -150,64 +159,114 @@ def build_vectorstore(
     return {
         'embeddings': all_embeddings,
         'chunks': chunks,
+        'chunk_method': chunk_method,
         'model_type': model_type,
         'embedding_dim': all_embeddings.shape[1],
         'save_dir': save_dir
     }
 
 
+def build_all_vectorstores(
+    chunks_semantic: List[Dict[str, Any]],
+    chunks_sliding: List[Dict[str, Any]],
+    batch_size: int = 32,
+    save_path: Optional[str] = None
+) -> Dict[str, Dict[str, Any]]:
+    """
+    构建全部 6 套向量库（2 种 chunk × 3 种 model）。
+
+    返回
+    -------
+    Dict[str, Dict[str, Any]]
+        嵌套字典：
+        {
+            'semantic': {'large': {...}, 'small': {...}, 'student': {...}},
+            'sliding_window': {'large': {...}, 'small': {...}, 'student': {...}}
+        }
+    """
+    print("=" * 60)
+    print("构建全部 6 套向量库")
+    print("=" * 60)
+
+    results = {
+        'semantic': {},
+        'sliding_window': {}
+    }
+
+    total = 0
+    for chunk_method in ['semantic', 'sliding_window']:
+        chunks = chunks_semantic if chunk_method == 'semantic' else chunks_sliding
+        for model_type in ['large', 'small', 'student']:
+            total += 1
+            print(f"\n[{total}/6] {chunk_method} + {model_type}...")
+            results[chunk_method][model_type] = build_vectorstore(
+                chunks, chunk_method=chunk_method, model_type=model_type,
+                batch_size=batch_size, save_path=save_path
+            )
+
+    print("\n" + "=" * 60)
+    print("全部 6 套向量库构建完成")
+    print("=" * 60)
+
+    return results
+
+
 # ==================== 加载向量库 ====================
 
 def load_vectorstore(
+    chunk_method: str = "semantic",
     model_type: str = "large",
     vectorstore_dir: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     从磁盘加载向量库。
 
-    从 vectordb 目录加载已保存的向量和元数据。
-
     参数
     ----------
+    chunk_method : str, optional
+        分块方法，可选 'semantic' | 'sliding_window'，默认为 'semantic'。
+
     model_type : str, optional
-        embedding 模型类型，可选 'large'、'small'、'student'，默认为 'large'。
+        embedding 模型类型，可选 'large' | 'small' | 'student'，默认为 'large'。
 
     vectorstore_dir : str, optional
-        向量库目录路径，默认为配置中的 vectordb 目录。
+        向量库目录路径。
 
     返回
     -------
     Dict[str, Any]
-        向量库信息，包括：
-        - 'embeddings': np.ndarray, 向量矩阵
-        - 'chunks': List[Dict], chunk 元数据列表
-        - 'info': Dict, 配置信息
-        - 'model_type': str, 使用的模型类型
+        向量库信息。
 
     Raises
     ------
     FileNotFoundError
         如果指定的向量库文件不存在。
     """
+    if chunk_method not in ['semantic', 'sliding_window']:
+        raise ValueError(f"不支持的分块方法：{chunk_method}")
+    if model_type not in ['large', 'small', 'student']:
+        raise ValueError(f"不支持的模型类型：{model_type}")
+
     print("=" * 60)
     print("加载向量库")
     print("=" * 60)
 
-    # 确定加载路径
     if vectorstore_dir is None:
         load_dir = get_vectorstore_dir()
     else:
         load_dir = Path(vectorstore_dir)
 
+    prefix = f"{chunk_method}_{model_type}"
+
     # 加载向量
-    embeddings_path = load_dir / f"embeddings_{model_type}.npy"
+    embeddings_path = load_dir / f"embeddings_{prefix}.npy"
     if not embeddings_path.exists():
         raise FileNotFoundError(f"向量文件不存在：{embeddings_path}")
     embeddings = np.load(embeddings_path)
     print(f"向量已加载：{embeddings_path}, 形状：{embeddings.shape}")
 
     # 加载元数据
-    metadata_path = load_dir / f"metadata_{model_type}.pkl"
+    metadata_path = load_dir / f"metadata_{prefix}.pkl"
     if not metadata_path.exists():
         raise FileNotFoundError(f"元数据文件不存在：{metadata_path}")
     with open(metadata_path, 'rb') as f:
@@ -215,33 +274,63 @@ def load_vectorstore(
     print(f"元数据已加载：{metadata_path}, 共 {len(chunks)} 个 chunk")
 
     # 加载配置信息
-    info_path = load_dir / f"info_{model_type}.json"
+    info_path = load_dir / f"info_{prefix}.json"
     if info_path.exists():
         with open(info_path, 'r', encoding='utf-8') as f:
             info = json.load(f)
-        print(f"配置信息已加载：{info_path}")
     else:
         info = {
+            'chunk_method': chunk_method,
             'model_type': model_type,
             'num_chunks': len(chunks),
             'embedding_dim': embeddings.shape[1]
         }
-        print("未找到配置文件，使用默认信息")
 
     print("\n" + "=" * 60)
     print("向量库加载完成")
     print("=" * 60)
     print(f"  - Chunk 数量：{len(chunks)}")
     print(f"  - 向量维度：{embeddings.shape[1]}")
-    print(f"  - 模型类型：{model_type}")
+    print(f"  - 组合方案：{chunk_method} + {model_type}")
 
     return {
         'embeddings': embeddings,
         'chunks': chunks,
-        'info': info,
+        'chunk_method': chunk_method,
         'model_type': model_type,
+        'embedding_dim': embeddings.shape[1],
         'load_dir': load_dir
     }
+
+
+def load_all_vectorstores(
+    vectorstore_dir: Optional[str] = None
+) -> Dict[str, Dict[str, Any]]:
+    """
+    加载全部 6 套向量库。
+
+    返回
+    -------
+    Dict[str, Dict[str, Any]]
+        包含 6 套向量库的嵌套字典。
+    """
+    print("=" * 60)
+    print("加载全部 6 套向量库")
+    print("=" * 60)
+
+    results = {
+        'semantic': {},
+        'sliding_window': {}
+    }
+
+    for chunk_method in ['semantic', 'sliding_window']:
+        for model_type in ['large', 'small', 'student']:
+            print(f"\n加载 {chunk_method} + {model_type}...")
+            results[chunk_method][model_type] = load_vectorstore(
+                chunk_method=chunk_method, model_type=model_type, vectorstore_dir=vectorstore_dir
+            )
+
+    return results
 
 
 # ==================== 向量检索 ====================
@@ -254,16 +343,13 @@ def search(
     """
     基于查询文本检索最相似的 chunk。
 
-    使用余弦相似度计算查询向量与向量库中所有向量的相似度。
-
     参数
     ----------
     query : str
         查询文本。
 
     vectorstore : Dict[str, Any]
-        向量库信息，由 load_vectorstore() 返回。
-        应包含 'embeddings' 和 'chunks' 字段。
+        向量库信息。
 
     top_k : int, optional
         返回最相似的 k 个结果，默认为 5。
@@ -271,30 +357,22 @@ def search(
     返回
     -------
     List[Tuple[Dict[str, Any], float]]
-        (chunk, similarity_score) 列表，按相似度降序排列。
-        每个 chunk 包含原始的 id、content 和 metadata。
-        相似度分数范围 [-1, 1]，越大越相似。
+        (chunk, similarity_score) 列表。
     """
-    # 获取 embedding 模型
     model_type = vectorstore.get('model_type', 'large')
     embedder = get_embedder(model_type)
 
-    # 确保查询是字符串并生成查询向量
     query = str(query).strip()
     query_vector = embedder['embed_query'](query, normalize=True)
     query_vector = query_vector.reshape(1, -1)
 
-    # 获取向量库中的向量
     embeddings = vectorstore['embeddings']
     chunks = vectorstore['chunks']
 
-    # 计算余弦相似度（向量已归一化，点积即余弦相似度）
+    # 余弦相似度（向量已归一化）
     similarities = np.dot(embeddings, query_vector.T).flatten()
-
-    # 获取 top_k 索引
     top_indices = np.argsort(similarities)[::-1][:top_k]
 
-    # 返回结果
     results = []
     for idx in top_indices:
         chunk = chunks[idx]
@@ -304,132 +382,143 @@ def search(
     return results
 
 
-def search_by_vector(
-    query_vector: np.ndarray,
-    vectorstore: Dict[str, Any],
-    top_k: int = 5
+def search_from_config(
+    query: str,
+    chunk_method: str = "semantic",
+    model_type: str = "large",
+    top_k: int = 5,
+    vectorstore_dir: Optional[str] = None
 ) -> List[Tuple[Dict[str, Any], float]]:
     """
-    基于查询向量检索最相似的 chunk。
+    便捷检索：自动加载向量库并检索。
 
     参数
     ----------
-    query_vector : np.ndarray
-        查询向量，形状应为 (embedding_dim,) 或 (1, embedding_dim)。
+    query : str
+        查询文本。
 
-    vectorstore : Dict[str, Any]
-        向量库信息，由 load_vectorstore() 返回。
+    chunk_method : str, optional
+        分块方法，默认为 'semantic'。
+
+    model_type : str, optional
+        模型类型，默认为 'large'。
 
     top_k : int, optional
-        返回最相似的 k 个结果，默认为 5。
+        返回结果数量，默认为 5。
+
+    vectorstore_dir : str, optional
+        向量库目录。
 
     返回
     -------
     List[Tuple[Dict[str, Any], float]]
-        (chunk, similarity_score) 列表，按相似度降序排列。
+        (chunk, score) 列表。
     """
-    # 确保向量形状正确
-    if query_vector.ndim == 1:
-        query_vector = query_vector.reshape(1, -1)
+    vectorstore = load_vectorstore(
+        chunk_method=chunk_method, model_type=model_type, vectorstore_dir=vectorstore_dir
+    )
+    return search(query, vectorstore, top_k)
 
-    # 获取向量库中的向量
-    embeddings = vectorstore['embeddings']
-    chunks = vectorstore['chunks']
 
-    # 计算余弦相似度
-    similarities = np.dot(embeddings, query_vector.T).flatten()
+# ==================== 检索器接口 ====================
 
-    # 获取 top_k 索引
-    top_indices = np.argsort(similarities)[::-1][:top_k]
+def get_searcher(
+    chunk_method: str = "semantic",
+    model_type: str = "large",
+    vectorstore: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    获取检索器接口。
 
-    # 返回结果
-    results = []
-    for idx in top_indices:
-        chunk = chunks[idx]
-        score = float(similarities[idx])
-        results.append((chunk, score))
+    参数
+    ----------
+    chunk_method : str, optional
+        分块方法，默认为 'semantic'。
 
-    return results
+    model_type : str, optional
+        模型类型，默认为 'large'。
+
+    vectorstore : Optional[Dict[str, Any]], optional
+        预加载的向量库。
+
+    返回
+    -------
+    Dict[str, Any]
+        包含 search 函数的字典。
+    """
+    if vectorstore is None:
+        vectorstore = load_vectorstore(chunk_method=chunk_method, model_type=model_type)
+
+    return {
+        'search': lambda q, k=5: search(q, vectorstore, k),
+        'vectorstore': vectorstore,
+        'chunk_method': chunk_method,
+        'model_type': model_type
+    }
 
 
 if __name__ == "__main__":
     import sys
-
-    # 添加 src 目录到路径
     PROJECT_ROOT = Path(__file__).parent.parent.parent
     sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
     from loading.loader import load_documents_from_dir
-    from chunking.chunker import sliding_window_chunking, get_chunking_config
+    from chunking.chunker import sliding_window_chunking, raw_data_semantic_chunking, get_chunking_config
     from chunking.preprocess import preprocess_chunks
 
     print("=" * 60)
-    print("向量库模块测试")
+    print("向量库模块测试 - 6 种组合方案")
     print("=" * 60)
 
-    # 测试：从原始文档构建向量库
-    print("\n" + "=" * 60)
-    print("测试 1: 构建向量库（使用前 10 个文档）")
-    print("=" * 60)
-
-    # 1. 加载少量文档测试
+    # 加载少量文档测试
     data_dir = PROJECT_ROOT / "data" / "raw"
-    documents = load_documents_from_dir(directory=str(data_dir))[:10]
+    documents = load_documents_from_dir(directory=str(data_dir))[:3]
     print(f"加载 {len(documents)} 个文档")
 
-    # 2. 分块
+    # 语义分块
+    print("\n" + "=" * 60)
+    print("语义分块...")
+    print("=" * 60)
+    chunks_semantic = raw_data_semantic_chunking(documents)
+    chunks_semantic = preprocess_chunks(chunks_semantic)
+
+    # 滑动窗口分块
+    print("\n" + "=" * 60)
+    print("滑动窗口分块...")
+    print("=" * 60)
     config = get_chunking_config()
-    chunks = sliding_window_chunking(
+    chunks_sliding = sliding_window_chunking(
         documents,
         window_size=config['chunk_size'],
         step_size=config['chunk_size'] - config['chunk_overlap'],
         min_chunk=config['min_chunk']
     )
-    print(f"分块后 {len(chunks)} 个块")
+    chunks_sliding = preprocess_chunks(chunks_sliding)
 
-    # 3. 预处理
-    clean_chunks = preprocess_chunks(
-        chunks,
-        min_chunk_length=20,
-        normalize_fullwidth=True,
-        normalize_punctuation=True,
-        normalize_dates=True
-    )
-    print(f"预处理后 {len(clean_chunks)} 个块")
+    print(f"\nsemantic: {len(chunks_semantic)} chunks")
+    print(f"sliding_window: {len(chunks_sliding)} chunks")
 
-    # 4. 构建向量库（使用 small 模型加快测试）
-    vectorstore = build_vectorstore(
-        clean_chunks,
-        model_type="small",
-        batch_size=16
-    )
+    # 构建 6 套向量库
+    all_stores = build_all_vectorstores(chunks_semantic, chunks_sliding, batch_size=8)
 
-    # 测试：加载向量库
+    # 测试检索
     print("\n" + "=" * 60)
-    print("测试 2: 加载向量库")
-    print("=" * 60)
-    loaded_vectorstore = load_vectorstore(model_type="small")
-
-    # 测试：检索
-    print("\n" + "=" * 60)
-    print("测试 3: 检索功能")
+    print("测试 6 种组合方案的检索")
     print("=" * 60)
 
-    test_queries = [
-        "增值税是什么？",
-        "企业所得税如何计算？",
-        "个人所得税有哪些扣除项目？"
-    ]
+    test_query = "增值税是什么？"
+    print(f"\n查询：{test_query}\n")
 
-    for query in test_queries:
-        print(f"\n查询：{query}")
-        results = search(query, loaded_vectorstore, top_k=3)
+    for chunk_method in ['semantic', 'sliding_window']:
+        for model_type in ['large', 'small', 'student']:
+            store = all_stores[chunk_method][model_type]
+            results = search(test_query, store, top_k=2)
 
-        for i, (chunk, score) in enumerate(results, 1):
-            print(f"  [{i}] 分数：{score:.4f}")
-            print(f"      ID: {chunk['id']}")
-            print(f"      内容：{chunk['content'][:80]}...")
+            print(f"[{chunk_method} + {model_type}]")
+            for i, (chunk, score) in enumerate(results, 1):
+                print(f"  [{i}] 分数：{score:.4f} | 内容：{chunk['content'][:50]}...")
+            print()
 
-    print("\n" + "=" * 60)
+    print("=" * 60)
     print("测试完成")
     print("=" * 60)

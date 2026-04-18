@@ -87,6 +87,7 @@ def load_large_model() -> SentenceTransformer:
     加载 large 规模的 embedding 模型。
 
     模型名称从 configs 的 embedding.model_large_name 读取。
+    优先从本地 models 目录加载，如果不存在则从 HuggingFace 下载。
     使用单例模式，首次调用时加载，后续调用返回缓存的模型。
 
     返回
@@ -100,7 +101,16 @@ def load_large_model() -> SentenceTransformer:
         config = _load_config()
         model_name = config.get('embedding', {}).get('model_large_name', 'BAAI/bge-large-zh-v1.5')
         print(f"正在加载 large 模型：{model_name}")
-        _large_model = SentenceTransformer(model_name)
+
+        # 尝试从本地加载
+        local_model_path = _get_local_model_path(model_name)
+        if local_model_path and local_model_path.exists():
+            print(f"从本地加载模型：{local_model_path}")
+            _large_model = SentenceTransformer(str(local_model_path))
+        else:
+            print(f"本地未找到模型，从 HuggingFace 下载：{model_name}")
+            _large_model = SentenceTransformer(model_name)
+
         print(f"Large 模型加载完成")
 
     return _large_model
