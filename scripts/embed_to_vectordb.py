@@ -35,12 +35,21 @@ def load_chunks_from_json(chunk_method: str) -> List[Dict[str, Any]]:
 
     返回
     -------
-    list
+    List[Dict[str, Any]]
         chunk 列表。
     """
     import json
 
-    chunks_file = f"chunks_{chunk_method}_cleaned.json"
+    # chunk_method 到文件名的映射
+    file_map = {
+        "semantic": "semantic",
+        "sliding_window": "sliding"
+    }
+
+    if chunk_method not in file_map:
+        raise ValueError(f"未知的 chunk_method: {chunk_method}，可选值：{list(file_map.keys())}")
+
+    chunks_file = f"chunks_{file_map[chunk_method]}_cleaned.json"
     chunks_path = PROJECT_ROOT / "data" / "processed" / chunks_file
 
     with open(chunks_path, "r", encoding="utf-8") as f:

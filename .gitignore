@@ -31,6 +31,8 @@ data/processed/*
 !data/processed/.gitkeep
 data/query/*
 !data/query/.gitkeep
+data/training/*
+!data/training/.gitkeep
 
 # Vector database
 vectordb/*
