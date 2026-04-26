@@ -35,18 +35,29 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
-# 获取项目根目录
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+# 获取项目根目录（training_FFT.py 在 src/retrieval/training/FFT/ 下）
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from sentence_transformers import SentenceTransformer, InputExample, losses
-from sentence_transformers.losses import TripletDistanceMetric
+from sentence_transformers import SentenceTransformer, InputExample
+from sentence_transformers.losses import TripletLoss, TripletDistanceMetric
 from torch.utils.data import DataLoader, Dataset
+import torch
 import numpy as np
 
 
 # 类型别名，用于忽略类型检查
 from typing import cast
+
+
+# ==================== 辅助函数 ====================
+
+def move_features_to_device(features: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
+    """将 feature dict 中的 tensor 移动到指定设备。"""
+    return {
+        k: v.to(device) if hasattr(v, 'to') else v
+        for k, v in features.items()
+    }
 
 
 # ==================== 路径配置 ====================
@@ -91,7 +102,7 @@ def load_chunks_map(chunks_file: Path) -> Dict[str, str]:
 
 
 def load_training_data(
-    data_file: str,
+    data_file: Optional[str] = None,
     chunks_file: Optional[str] = None,
     chunk_method: str = "semantic"
 ) -> List[InputExample]:
@@ -105,12 +116,12 @@ def load_training_data(
     ----------
     data_file : str
         训练数据文件名（相对于 data/training 目录）。
-    chunks_file : str
+    chunks_file : str, optional
         chunks 文件名（相对于 data/processed 目录）。
     chunk_method : str
-        分块方法，用于自动推断 chunks 文件名。
-        'semantic' → chunks_semantic_cleaned.json
-        'sliding_window' → chunks_sliding_cleaned.json
+        分块方法，用于自动推断文件名。
+        'semantic' → semantic_triplets.json / chunks_semantic_cleaned.json
+        'sliding_window' → sliding_triplets.json / chunks_sliding_cleaned.json
 
     返回
     -------
@@ -122,9 +133,8 @@ def load_training_data(
     training_data_path = get_training_data_path()
     processed_data_dir = get_processed_data_dir()
 
-    # 加载 chunks 映射
+    # 自动推断文件名
     if chunks_file is None:
-        # 根据 chunk_method 自动推断
         if chunk_method == "semantic":
             chunks_file = "chunks_semantic_cleaned.json"
         elif chunk_method == "sliding_window":
@@ -132,6 +142,15 @@ def load_training_data(
         else:
             raise ValueError(f"未知的 chunk_method: {chunk_method}")
 
+    if data_file is None:
+        if chunk_method == "semantic":
+            data_file = "semantic_triplets.json"
+        elif chunk_method == "sliding_window":
+            data_file = "sliding_triplets.json"
+        else:
+            raise ValueError(f"未知的 chunk_method: {chunk_method}")
+
+    # 加载 chunks 映射
     chunks_path = processed_data_dir / chunks_file
     print(f"加载 chunks 映射：{chunks_path}")
     chunks_map = load_chunks_map(chunks_path)
@@ -145,41 +164,42 @@ def load_training_data(
     missing_positive = 0
     missing_negative = 0
 
+    # 读取训练数据（支持 JSON 数组格式）
     with open(data_path, 'r', encoding='utf-8') as f:
-        for line_num, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
-                continue
+        content = f.read()
+        try:
+            data = json.loads(content)
+            if isinstance(data, list):
+                triplet_list = data
+            else:
+                triplet_list = [data]
+        except json.JSONDecodeError as e:
+            print(f"JSON 解析失败：{e}")
+            return examples
 
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError as e:
-                print(f"第 {line_num} 行 JSON 解析失败：{e}")
-                continue
+    for triplet in triplet_list:
+        query = triplet.get('query', '')
+        positive_id = triplet.get('positive_chunk_id', '')
+        negative_id = triplet.get('negative_chunk_id', '')
 
-            query = data.get('query', '')
-            positive_id = data.get('positive_chunk_id', '')
-            negative_id = data.get('negative_chunk_id', '')
+        if not query:
+            continue
 
-            if not query:
-                print(f"第 {line_num} 行：缺少 query 字段")
-                continue
+        # 查找 chunk 内容
+        positive = chunks_map.get(positive_id)
+        negative = chunks_map.get(negative_id)
 
-            # 查找 chunk 内容
-            positive = chunks_map.get(positive_id)
-            negative = chunks_map.get(negative_id)
+        if positive is None:
+            missing_positive += 1
+            continue
+        if negative is None:
+            missing_negative += 1
+            continue
 
-            if positive is None:
-                missing_positive += 1
-                continue
-            if negative is None:
-                missing_negative += 1
-                continue
-
-            examples.append(InputExample(
-                texts=[query, positive, negative],
-                label=1.0
-            ))
+        examples.append(InputExample(
+            texts=[query, positive, negative],
+            label=1.0
+        ))
 
     print(f"加载完成：{len(examples)} 个有效 triplet")
     if missing_positive > 0:
@@ -235,14 +255,14 @@ def find_learning_rate(
     import torch
     from torch.optim import AdamW
 
-    train_dataloader = DataLoader(train_examples, batch_size=batch_size, shuffle=True)  # type: ignore
+    # 使用自定义 collate_fn 构建 DataLoader
+    def identity_collate(batch):
+        return batch
 
-    # 创建 Triplet Loss - 使用 triplet_margin 参数（新版 sentence-transformers）
-    train_loss = losses.TripletLoss(
-        model=model,
-        triplet_margin=margin,
-        distance_metric=TripletDistanceMetric.COSINE
-    )
+    train_dataloader = DataLoader(train_examples, batch_size=batch_size, shuffle=True, collate_fn=identity_collate)
+
+    # 使用 PyTorch TripletMarginLoss（sentence-transformers 的 TripletLoss 只适合 model.fit 内部使用）
+    train_loss_fn = torch.nn.TripletMarginLoss(margin=margin, p=2)
 
     # 优化器
     optimizer = AdamW(model.parameters(), lr=min_lr)
@@ -272,8 +292,24 @@ def find_learning_rate(
             current_lr = optimizer.param_groups[0]['lr']
             lrs.append(current_lr)
 
-            # 训练一步
-            loss = train_loss(batch)
+            # 从 InputExample 提取文本
+            texts = [example.texts for example in batch]
+            anchors = [t[0] for t in texts]
+            positives = [t[1] for t in texts]
+            negatives = [t[2] for t in texts]
+
+            # tokenize + forward 计算 embeddings（保留梯度）
+            device = model.device
+            anchor_features = move_features_to_device(model.tokenize(anchors), device)
+            positive_features = move_features_to_device(model.tokenize(positives), device)
+            negative_features = move_features_to_device(model.tokenize(negatives), device)
+
+            anchor_emb = model(anchor_features)['sentence_embedding']
+            positive_emb = model(positive_features)['sentence_embedding']
+            negative_emb = model(negative_features)['sentence_embedding']
+
+            # 计算 triplet loss (使用 PyTorch TripletMarginLoss)
+            loss = train_loss_fn(anchor_emb, positive_emb, negative_emb)
             losses_list.append(loss.item())
 
             loss.backward()
@@ -402,7 +438,11 @@ def train_with_early_stopping(
     """
     import torch
 
-    train_dataloader = DataLoader(train_examples, batch_size=batch_size, shuffle=True)  # type: ignore
+    # 使用自定义 collate_fn 构建 DataLoader（新版 sentence-transformers 5.x）
+    def identity_collate(batch):
+        return batch
+
+    train_dataloader = DataLoader(train_examples, batch_size=batch_size, shuffle=True, collate_fn=identity_collate)
 
     # 验证集
     if eval_examples is None:
@@ -410,16 +450,12 @@ def train_with_early_stopping(
         eval_size = max(1, len(train_examples) // 10)
         eval_examples = train_examples[-eval_size:]
         train_examples = train_examples[:-eval_size]
-        train_dataloader = DataLoader(train_examples, batch_size=batch_size, shuffle=True)  # type: ignore
+        train_dataloader = DataLoader(train_examples, batch_size=batch_size, shuffle=True, collate_fn=identity_collate)
 
-    eval_dataloader = DataLoader(eval_examples, batch_size=batch_size, shuffle=False)  # type: ignore
+    eval_dataloader = DataLoader(eval_examples, batch_size=batch_size, shuffle=False, collate_fn=identity_collate)
 
-    # 创建 Triplet Loss - 使用 triplet_margin 参数（新版 sentence-transformers）
-    train_loss = losses.TripletLoss(
-        model=model,
-        triplet_margin=margin,
-        distance_metric=TripletDistanceMetric.COSINE
-    )
+    # 使用 PyTorch TripletMarginLoss（sentence-transformers 的 TripletLoss 只适合 model.fit 内部使用）
+    train_loss_fn = torch.nn.TripletMarginLoss(margin=margin, p=2)
 
     # 自动计算 warmup_steps
     total_steps = len(train_dataloader) * max_epochs
@@ -435,6 +471,9 @@ def train_with_early_stopping(
     # 早停回调
     early_stopping = EarlyStopping(patience=patience, min_delta=min_delta)
 
+    # 创建优化器
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+
     # 训练循环
     actual_epochs = 0
     best_eval_loss = float('inf')
@@ -445,9 +484,27 @@ def train_with_early_stopping(
         train_losses = []
 
         for batch in train_dataloader:
-            loss = train_loss(batch)
+            # 从 InputExample 提取文本
+            texts = [example.texts for example in batch]
+            anchors = [t[0] for t in texts]
+            positives = [t[1] for t in texts]
+            negatives = [t[2] for t in texts]
+
+            # tokenize + forward 计算 embeddings（保留梯度）
+            device = model.device
+            anchor_features = move_features_to_device(model.tokenize(anchors), device)
+            positive_features = move_features_to_device(model.tokenize(positives), device)
+            negative_features = move_features_to_device(model.tokenize(negatives), device)
+
+            anchor_emb = model(anchor_features)['sentence_embedding']
+            positive_emb = model(positive_features)['sentence_embedding']
+            negative_emb = model(negative_features)['sentence_embedding']
+
+            # 计算 triplet loss (使用 PyTorch TripletMarginLoss)
+            loss = train_loss_fn(anchor_emb, positive_emb, negative_emb)
             loss.backward()
-            torch.optim.AdamW(model.parameters(), lr=learning_rate).step()
+            optimizer.step()
+            optimizer.zero_grad()
             train_losses.append(loss.item())
 
         # 评估一轮
@@ -455,7 +512,21 @@ def train_with_early_stopping(
         eval_losses = []
         with torch.no_grad():
             for batch in eval_dataloader:
-                loss = train_loss(batch)
+                texts = [example.texts for example in batch]
+                anchors = [t[0] for t in texts]
+                positives = [t[1] for t in texts]
+                negatives = [t[2] for t in texts]
+
+                device = model.device
+                anchor_features = move_features_to_device(model.tokenize(anchors), device)
+                positive_features = move_features_to_device(model.tokenize(positives), device)
+                negative_features = move_features_to_device(model.tokenize(negatives), device)
+
+                anchor_emb = model(anchor_features)['sentence_embedding']
+                positive_emb = model(positive_features)['sentence_embedding']
+                negative_emb = model(negative_features)['sentence_embedding']
+
+                loss = train_loss_fn(anchor_emb, positive_emb, negative_emb)
                 eval_losses.append(loss.item())
 
         avg_train_loss = np.mean(train_losses)
@@ -538,8 +609,13 @@ def train_fft(
 
     print(f"模型设备：{model.device}")
 
+    # 使用自定义 collate_fn 构建 DataLoader（新版 sentence-transformers 5.x）
+    def identity_collate(batch):
+        return batch
+
+    train_dataloader = DataLoader(train_examples, batch_size=batch_size, shuffle=True, collate_fn=identity_collate)
+
     # 自动计算 warmup_steps
-    train_dataloader = DataLoader(train_examples, batch_size=batch_size, shuffle=True)  # type: ignore
     total_steps = len(train_dataloader) * num_epochs
     warmup_steps = int(total_steps * warmup_ratio)
 
@@ -552,7 +628,7 @@ def train_fft(
     print(f"  Margin: {margin}")
 
     # 创建 Triplet Loss - 使用 triplet_margin 参数（新版 sentence-transformers）
-    train_loss = losses.TripletLoss(
+    train_loss = TripletLoss(
         model=model,
         triplet_margin=margin,
         distance_metric=TripletDistanceMetric.COSINE

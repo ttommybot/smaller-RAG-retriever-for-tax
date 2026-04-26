@@ -1,28 +1,33 @@
 # -*- coding: utf-8 -*-
 """
-MiniLM 全参数微调训练脚本
+MiniLM 全参数微调训练脚本（批量训练版）
 
-使用学习率查找器和早停法自动确定最佳超参数，对 MiniLM 模型进行全参数微调。
+循环训练 6 种组合：2 种 chunk 方法 × 3 种 margin
+- chunk_method: semantic, sliding
+- margin: 0.3, 0.4, 0.5
 
 固定配置：
 - Batch size: 64
 - Warmup steps: 10%
 - Loss function: TripletLoss
-- 学习率：通过学习率查找器自动确定
-- 训练轮数：通过早停法自动确定
-- Margin：手动指定
+
+自动确定：
+- 学习率：通过学习率查找器
+- 训练轮数：通过早停法
+
+记录：
+- 训练时间
+- 显存占用
+- 输出对比表格到根目录
 
 使用方法：
-    # 使用 semantic 分块数据，margin=0.5
-    python scripts/train_minilm_FFT.py --chunk-method semantic --margin 0.5
-
-    # 使用 sliding_window 分块数据，margin=0.3
-    python scripts/train_minilm_FFT.py --chunk-method sliding_window --margin 0.3
+    python scripts/train_minilm_FFT.py
 """
 
 import sys
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Any, List, Tuple
 
 # 获取项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -32,157 +37,170 @@ from retrieval.training.FFT.training_FFT import (
     load_training_data,
     find_learning_rate,
     get_models_dir,
+    get_training_data_path,
+    get_processed_data_dir,
+    load_chunks_map,
+    move_features_to_device,
 )
 
-# 导入 TripletDistanceMetric 用于 TripletLoss
-from sentence_transformers.losses import TripletDistanceMetric
+from sentence_transformers import SentenceTransformer, InputExample
 from torch.utils.data import DataLoader
+import torch
+import numpy as np
+import json
+import yaml
 
 
-def train_minilm_fft(
-    chunk_method: str = "semantic",
-    margin: float = 0.5,
-    data_file: Optional[str] = None,
-    chunks_file: Optional[str] = None,
+# ==================== 加载配置 ====================
+
+def load_config() -> Dict[str, Any]:
+    """从 configs/configs.yaml 加载训练配置。"""
+    config_path = PROJECT_ROOT / "configs" / "configs.yaml"
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    return config.get('fft', {})
+
+
+# 加载配置
+_config = load_config()
+CHUNK_METHODS = _config.get('chunk_methods', ["semantic", "sliding"])
+MARGINS = _config.get('margins', [0.3, 0.4, 0.5])
+BATCH_SIZE = _config.get('batch_size', 64)
+WARMUP_RATIO = _config.get('warmup_ratio', 0.1)
+MAX_EPOCHS = _config.get('max_epochs', 20)
+PATIENCE = _config.get('patience', 3)
+
+
+# ==================== 单次训练函数 ====================
+
+def train_single_config(
+    chunk_method: str,
+    margin: float,
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-    output_name: str = "sentence-transformers/all-MiniLM-L6-v2-FFT",
-    max_epochs: int = 10,
-    patience: int = 3,
     use_cuda: bool = True,
     skip_lr_finder: bool = False,
-    manual_lr: Optional[float] = None,
-) -> None:
+    manual_lr: float = 2e-5,
+) -> Dict[str, Any]:
     """
-    执行 MiniLM 全参数微调训练。
-
-    固定配置：
-    - Batch size: 64
-    - Warmup: 10%
-    - Loss: TripletLoss
-
-    自动确定：
-    - 学习率：通过学习率查找器
-    - 训练轮数：通过早停法
-
-    手动指定：
-    - Margin：通过参数
+    执行单次 MiniLM 微调训练。
 
     参数
     ----------
     chunk_method : str
-        分块方法，'semantic' 或 'sliding_window'。
+        分块方法，'semantic' 或 'sliding'。
     margin : float
-        Triplet Loss 边距，推荐 0.3 ~ 0.7。
-    data_file : str, optional
-        训练数据文件名。默认根据 chunk_method 自动选择：
-        - semantic → semantic_trained.json
-        - sliding_window → sliding_trained.json
-    chunks_file : str, optional
-        Chunks 文件名。默认根据 chunk_method 自动选择：
-        - semantic → chunks_semantic_cleaned.json
-        - sliding_window → chunks_sliding_cleaned.json
+        Triplet Loss 边距。
     model_name : str
         基座模型名称。
-    output_name : str
-        输出模型名称。
-    max_epochs : int
-        最大训练轮数（早停法上限）。
-    patience : int
-        早停容忍轮数。
     use_cuda : bool
         是否使用 GPU。
     skip_lr_finder : bool
-        是否跳过学习率查找。
-    manual_lr : float, optional
-        手动指定学习率（跳过学习率查找器）。
+        是否跳过学习率查找器。
+    manual_lr : float
+        手动指定的学习率。
+
+    返回
+    -------
+    Dict[str, Any]
+        训练结果，包含时间、显存、模型路径等。
     """
-    import torch
-    import json
-    import numpy as np
-    from sentence_transformers import SentenceTransformer, losses
-    from torch.utils.data import DataLoader
+    # 结果字典
+    result = {
+        "chunk_method": chunk_method,
+        "margin": margin,
+        "train_time": 0,
+        "memory_mb": 0,
+        "actual_epochs": 0,
+        "best_eval_loss": float('inf'),
+        "learning_rate": manual_lr,
+        "output_model": "",
+        "train_samples": 0,
+        "eval_samples": 0,
+    }
 
-    print("=" * 60)
-    print("MiniLM 全参数微调训练")
-    print("=" * 60)
+    # 重置显存统计
+    if use_cuda and torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
 
-    # ==================== 自动推断文件名 ====================
-    if data_file is None:
-        if chunk_method == "semantic":
-            data_file = "semantic_trained.json"
-        elif chunk_method == "sliding_window":
-            data_file = "sliding_trained.json"
-        else:
-            raise ValueError(f"未知的 chunk_method: {chunk_method}")
+    # 开始计时
+    start_time = time.time()
 
-    print(f"\n配置:")
-    print(f"  分块方法：{chunk_method}")
-    print(f"  训练数据：{data_file}")
-    print(f"  Margin: {margin}")
-    print(f"  Batch size: 64 (固定)")
-    print(f"  Warmup: 10% (固定)")
-    print(f"  Loss: TripletLoss (固定)")
-    print(f"  最大轮数：{max_epochs}")
-    print(f"  早停容忍：{patience} 轮")
-
-    # ==================== 步骤 1: 加载训练数据 ====================
     print("\n" + "=" * 60)
-    print("步骤 1: 加载训练数据")
+    print(f"训练配置: {chunk_method} + margin={margin}")
     print("=" * 60)
 
-    train_examples = load_training_data(
-        data_file=data_file,
-        chunks_file=chunks_file,
-        chunk_method=chunk_method
-    )
+    # ==================== 加载训练数据 ====================
+    print("\n步骤 1: 加载训练数据")
+
+    # 文件名推断
+    if chunk_method == "semantic":
+        data_file = "semantic_triplets.json"
+        chunks_file = "chunks_semantic_cleaned.json"
+    elif chunk_method == "sliding":
+        data_file = "sliding_triplets.json"
+        chunks_file = "chunks_sliding_cleaned.json"
+    else:
+        raise ValueError(f"未知的 chunk_method: {chunk_method}")
+
+    # 加载 chunks 映射
+    chunks_path = get_processed_data_dir() / chunks_file
+    chunks_map = load_chunks_map(chunks_path)
+    print(f"  加载 {len(chunks_map)} 个 chunks")
+
+    # 加载训练数据
+    data_path = get_training_data_path() / data_file
+    with open(data_path, 'r', encoding='utf-8') as f:
+        triplet_list = json.load(f)
+
+    # 构建 InputExample
+    train_examples = []
+    for triplet in triplet_list:
+        query = triplet.get('query', '')
+        positive_id = triplet.get('positive_chunk_id', '')
+        negative_id = triplet.get('negative_chunk_id', '')
+
+        positive = chunks_map.get(positive_id)
+        negative = chunks_map.get(negative_id)
+
+        if query and positive and negative:
+            train_examples.append(InputExample(
+                texts=[query, positive, negative],
+                label=1.0
+            ))
+
+    print(f"  加载 {len(train_examples)} 个 triplet 样本")
 
     if not train_examples:
-        print("错误：未加载到任何训练数据")
-        return
+        print("  错误：未加载到任何训练数据")
+        return result
 
-    print(f"共 {len(train_examples)} 个 triplet 样本")
+    # ==================== 确定学习率 ====================
+    print("\n步骤 2: 确定学习率")
 
-    # ==================== 步骤 2: 确定学习率 ====================
-    print("\n" + "=" * 60)
-    print("步骤 2: 确定学习率")
-    print("=" * 60)
+    models_dir = get_models_dir()
+    local_model_name = model_name.replace("/", "--")
+    model_path = models_dir / local_model_name
 
-    if skip_lr_finder or manual_lr is not None:
-        if manual_lr is not None:
-            learning_rate = manual_lr
-            print(f"使用手动指定的学习率：{learning_rate}")
-        else:
-            learning_rate = 2e-5
-            print(f"使用默认学习率：{learning_rate}")
+    if model_path.exists():
+        print(f"  从本地加载模型：{model_path}")
+        model = SentenceTransformer(str(model_path))
     else:
-        print("运行学习率查找器...")
-        print("这将训练约 100 个 batch，耗时 1-3 分钟")
+        print(f"  本地未找到，从 HuggingFace 下载：{model_name}")
+        model = SentenceTransformer(model_name)
 
-        # 加载模型进行学习率查找
-        models_dir = get_models_dir()
-        local_model_name = model_name.replace("/", "--")
-        model_path = models_dir / local_model_name
-
-        if model_path.exists():
-            print(f"从本地加载模型：{model_path}")
-            model = SentenceTransformer(str(model_path))
-        else:
-            print(f"本地未找到模型，从 HuggingFace 下载：{model_name}")
-            model = SentenceTransformer(model_name)
-
-        # 运行学习率查找器
+    if not skip_lr_finder:
+        print("  运行学习率查找器...")
         lrs, losses_list = find_learning_rate(
             model=model,
             train_examples=train_examples,
-            batch_size=64,
+            batch_size=BATCH_SIZE,
             margin=margin,
             use_cuda=use_cuda
         )
 
-        # 从曲线中找到最佳学习率
+        # 找最佳学习率
         best_idx = 0
         best_slope = float('inf')
-
         for i in range(5, len(losses_list) - 5):
             slope = (losses_list[i + 5] - losses_list[i - 5]) / (np.log(lrs[i + 5]) - np.log(lrs[i - 5]))
             if slope < best_slope:
@@ -190,75 +208,74 @@ def train_minilm_fft(
                 best_idx = i
 
         learning_rate = lrs[best_idx]
-        print(f"\n找到最佳学习率：{learning_rate:.2e}")
+        print(f"  找到最佳学习率：{learning_rate:.2e}")
+        result["learning_rate"] = learning_rate
 
-        # 保存学习率查找结果用于绘图
-        lr_finder_output = PROJECT_ROOT / "data" / "training" / "lr_finder_results.json"
-        lr_finder_output.parent.mkdir(parents=True, exist_ok=True)
-        with open(lr_finder_output, 'w', encoding='utf-8') as f:
-            json.dump({
-                'learning_rates': lrs,
-                'losses': losses_list,
-                'best_lr': learning_rate,
-                'best_idx': best_idx
-            }, f, ensure_ascii=False, indent=2)
-        print(f"学习率查找结果已保存到：{lr_finder_output}")
-
-    # ==================== 步骤 3: 训练模型（早停法） ====================
-    print("\n" + "=" * 60)
-    print("步骤 3: 训练模型（早停法）")
-    print("=" * 60)
-
-    # 加载模型
-    models_dir = get_models_dir()
-    local_model_name = model_name.replace("/", "--")
-    model_path = models_dir / local_model_name
-
-    if model_path.exists():
-        print(f"从本地加载：{model_path}")
-        model = SentenceTransformer(str(model_path))
+        # 重新加载模型（学习率查找会修改模型）
+        if model_path.exists():
+            model = SentenceTransformer(str(model_path))
+        else:
+            model = SentenceTransformer(model_name)
     else:
-        print(f"本地未找到，从 HuggingFace 下载：{model_name}")
-        model = SentenceTransformer(model_name)
+        learning_rate = manual_lr
+        print(f"  使用手动指定的学习率：{learning_rate}")
 
-    # 早停法训练
-    batch_size = 64
-    warmup_ratio = 0.1
+    # ==================== 早停法训练 ====================
+    print("\n步骤 3: 早停法训练")
 
     # 划分训练集和验证集
     eval_size = max(1, len(train_examples) // 10)
     eval_examples = train_examples[-eval_size:]
     train_examples_actual = train_examples[:-eval_size]
 
-    print(f"\n训练集：{len(train_examples_actual)} 样本")
-    print(f"验证集：{len(eval_examples)} 样本")
+    result["train_samples"] = len(train_examples_actual)
+    result["eval_samples"] = len(eval_examples)
 
-    train_dataloader = DataLoader(train_examples_actual, batch_size=batch_size, shuffle=True)  # type: ignore
-    eval_dataloader = DataLoader(eval_examples, batch_size=batch_size, shuffle=False)  # type: ignore
+    print(f"  训练集：{len(train_examples_actual)} 样本")
+    print(f"  验证集：{len(eval_examples)} 样本")
 
-    train_loss = losses.TripletLoss(
-        model=model,
-        triplet_margin=margin,
-        distance_metric=TripletDistanceMetric.COSINE
-    )
+    # 使用自定义 collate_fn 构建 DataLoader（新版 sentence-transformers 5.x）
+    def identity_collate(batch):
+        return batch
 
-    # 配置优化器 - 直接存储在 model 属性中
+    train_dataloader = DataLoader(train_examples_actual, batch_size=BATCH_SIZE, shuffle=True, collate_fn=identity_collate)
+    eval_dataloader = DataLoader(eval_examples, batch_size=BATCH_SIZE, shuffle=False, collate_fn=identity_collate)
+
+    # 创建 TripletLoss（使用 PyTorch TripletMarginLoss）
+    train_loss_fn = torch.nn.TripletMarginLoss(margin=margin, p=2)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
     best_eval_loss = float('inf')
     best_epoch = 0
     patience_counter = 0
 
-    print(f"\n开始训练（最多 {max_epochs} 轮，早停容忍 {patience} 轮）")
-    print(f"学习率：{learning_rate:.2e}, Margin: {margin}")
+    print(f"  开始训练（最多 {MAX_EPOCHS} 轮，早停容忍 {PATIENCE} 轮）")
 
-    for epoch in range(max_epochs):
+    for epoch in range(MAX_EPOCHS):
         # 训练一轮
         model.train()
         train_losses = []
 
         for batch in train_dataloader:
-            loss = train_loss(batch)
+            # 从 InputExample 提取文本
+            texts = [example.texts for example in batch]
+            anchors = [t[0] for t in texts]
+            positives = [t[1] for t in texts]
+            negatives = [t[2] for t in texts]
+
+            # tokenize + forward 计算 embeddings（保留梯度）
+            device = model.device
+            anchor_features = move_features_to_device(model.tokenize(anchors), device)
+            positive_features = move_features_to_device(model.tokenize(positives), device)
+            negative_features = move_features_to_device(model.tokenize(negatives), device)
+
+            anchor_emb = model(anchor_features)['sentence_embedding']
+            positive_emb = model(positive_features)['sentence_embedding']
+            negative_emb = model(negative_features)['sentence_embedding']
+
+            # 计算 triplet loss (使用 PyTorch TripletMarginLoss)
+            loss = train_loss_fn(anchor_emb, positive_emb, negative_emb)
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
@@ -269,99 +286,188 @@ def train_minilm_fft(
         eval_losses = []
         with torch.no_grad():
             for batch in eval_dataloader:
-                loss = train_loss(batch)
+                texts = [example.texts for example in batch]
+                anchors = [t[0] for t in texts]
+                positives = [t[1] for t in texts]
+                negatives = [t[2] for t in texts]
+
+                device = model.device
+                anchor_features = move_features_to_device(model.tokenize(anchors), device)
+                positive_features = move_features_to_device(model.tokenize(positives), device)
+                negative_features = move_features_to_device(model.tokenize(negatives), device)
+
+                anchor_emb = model(anchor_features)['sentence_embedding']
+                positive_emb = model(positive_features)['sentence_embedding']
+                negative_emb = model(negative_features)['sentence_embedding']
+
+                loss = train_loss_fn(anchor_emb, positive_emb, negative_emb)
                 eval_losses.append(loss.item())
 
         avg_train_loss = np.mean(train_losses)
         avg_eval_loss = np.mean(eval_losses)
 
-        print(f"\nEpoch {epoch + 1}/{max_epochs}:")
-        print(f"  训练损失：{avg_train_loss:.4f}")
-        print(f"  验证损失：{avg_eval_loss:.4f}")
+        print(f"    Epoch {epoch + 1}: train_loss={avg_train_loss:.4f}, eval_loss={avg_eval_loss:.4f}")
 
         # 检查是否改善
         if avg_eval_loss < best_eval_loss:
             best_eval_loss = avg_eval_loss
             best_epoch = epoch + 1
             patience_counter = 0
-            print(f"  ✓ 验证损失改善（最佳：{best_eval_loss:.4f}）")
         else:
             patience_counter += 1
-            print(f"  - 未改善（容忍：{patience_counter}/{patience}）")
 
         # 检查早停
-        if patience_counter >= patience:
-            print(f"\n早停触发：验证损失连续 {patience} 轮未改善")
+        if patience_counter >= PATIENCE:
+            print(f"    早停触发：验证损失连续 {PATIENCE} 轮未改善")
             break
 
     actual_epochs = epoch + 1
+    result["actual_epochs"] = actual_epochs
+    result["best_eval_loss"] = best_eval_loss
 
-    print(f"\n训练完成:")
-    print(f"  实际训练轮数：{actual_epochs}")
-    print(f"  最佳轮数：{best_epoch} (验证损失：{best_eval_loss:.4f})")
+    print(f"  训练完成：{actual_epochs} 轮，最佳验证损失：{best_eval_loss:.4f}")
 
-    # 保存模型
-    output_model_path = models_dir / output_name.replace("/", "--")
+    # ==================== 保存模型 ====================
+    print("\n步骤 4: 保存模型")
+
+    output_model_name = f"sentence-transformers--all-MiniLM-L6-v2-FFT-{chunk_method}-{margin}"
+    output_model_path = models_dir / output_model_name
     output_model_path.mkdir(parents=True, exist_ok=True)
     model.save(str(output_model_path))
 
-    print(f"\n微调后的模型已保存到：{output_model_path}")
-    print(f"模型名称：{output_name}")
+    result["output_model"] = str(output_model_path)
+    print(f"  模型保存到：{output_model_path}")
 
+    # ==================== 记录时间和显存 ====================
+    elapsed_time = time.time() - start_time
+    result["train_time"] = elapsed_time
+    print(f"  训练时间：{elapsed_time:.2f} 秒")
+
+    if use_cuda and torch.cuda.is_available():
+        memory_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+        result["memory_mb"] = memory_mb
+        print(f"  显存占用：{memory_mb:.2f} MB")
+
+    return result
+
+
+# ==================== 批量训练函数 ====================
+
+def train_all_configs(
+    use_cuda: bool = True,
+    skip_lr_finder: bool = False,
+    manual_lr: float = 2e-5,
+) -> List[Dict[str, Any]]:
+    """
+    执行 6 次训练（2 种 chunk 方法 × 3 种 margin）。
+
+    参数
+    ----------
+    use_cuda : bool
+        是否使用 GPU。
+    skip_lr_finder : bool
+        是否跳过学习率查找器。
+    manual_lr : float
+        手动指定的学习率。
+
+    返回
+    -------
+    List[Dict[str, Any]]
+        所有训练结果列表。
+    """
+    all_results = []
+
+    print("=" * 60)
+    print("MiniLM 全参数微调批量训练")
+    print("=" * 60)
+    print(f"\n配置:")
+    print(f"  Chunk 方法：{CHUNK_METHODS}")
+    print(f"  Margin：{MARGINS}")
+    print(f"  共 6 次训练")
+    print(f"  Batch size: {BATCH_SIZE}")
+    print(f"  Warmup: {WARMUP_RATIO * 100:.0f}%")
+    print(f"  最大轮数：{MAX_EPOCHS}")
+    print(f"  早停容忍：{PATIENCE} 轮")
+    print(f"  使用 GPU：{use_cuda and torch.cuda.is_available()}")
+
+    # 循环训练
+    for chunk_method in CHUNK_METHODS:
+        for margin in MARGINS:
+            result = train_single_config(
+                chunk_method=chunk_method,
+                margin=margin,
+                use_cuda=use_cuda,
+                skip_lr_finder=skip_lr_finder,
+                manual_lr=manual_lr,
+            )
+            all_results.append(result)
+
+    return all_results
+
+
+# ==================== 保存结果表格 ====================
+
+def save_results_table(results: List[Dict[str, Any]], output_path: Path) -> None:
+    """
+    保存训练结果对比表格。
+
+    参数
+    ----------
+    results : List[Dict[str, Any]]
+        训练结果列表。
+    output_path : Path
+        输出文件路径。
+    """
+    # 保存 JSON
+    json_path = output_path.with_suffix('.json')
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+    print(f"\n结果已保存到：{json_path}")
+
+    # 保存 Markdown 表格
+    md_path = output_path.with_suffix('.md')
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write("# MiniLM 全参数微调训练结果对比\n\n")
+        f.write(f"**生成时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        f.write("---\n\n")
+
+        f.write("## 训练配置\n\n")
+        f.write(f"- Batch size: {BATCH_SIZE}\n")
+        f.write(f"- Warmup: {WARMUP_RATIO * 100:.0f}%\n")
+        f.write(f"- Loss: TripletLoss\n")
+        f.write(f"- 最大轮数：{MAX_EPOCHS}\n")
+        f.write(f"- 早停容忍：{PATIENCE} 轮\n\n")
+
+        f.write("## 结果对比\n\n")
+        f.write("| Chunk 方法 | Margin | 训练时间(s) | 显存(MB) | 实际轮数 | 最佳验证损失 | 学习率 | 模型路径 |\n")
+        f.write("|------------|--------|-------------|----------|----------|--------------|--------|----------|\n")
+
+        for r in results:
+            f.write(f"| {r['chunk_method']} | {r['margin']} | {r['train_time']:.2f} | {r['memory_mb']:.2f} | {r['actual_epochs']} | {r['best_eval_loss']:.4f} | {r['learning_rate']:.2e} | models/\n")
+
+        f.write("\n---\n\n")
+        f.write("## 详细结果\n\n")
+
+        for r in results:
+            f.write(f"### {r['chunk_method']} + margin={r['margin']}\n\n")
+            f.write(f"- 训练样本：{r['train_samples']}\n")
+            f.write(f"- 验证样本：{r['eval_samples']}\n")
+            f.write(f"- 实际训练轮数：{r['actual_epochs']}\n")
+            f.write(f"- 最佳验证损失：{r['best_eval_loss']:.4f}\n")
+            f.write(f"- 训练时间：{r['train_time']:.2f} 秒\n")
+            f.write(f"- 显存占用：{r['memory_mb']:.2f} MB\n")
+            f.write(f"- 学习率：{r['learning_rate']:.2e}\n")
+            f.write(f"- 模型路径：{r['output_model']}\n\n")
+
+    print(f"Markdown 表格已保存到：{md_path}")
+
+
+# ==================== 主函数 ====================
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="MiniLM 全参数微调训练脚本")
-    parser.add_argument(
-        "--chunk-method",
-        type=str,
-        choices=["semantic", "sliding_window"],
-        default="semantic",
-        help="分块方法，默认 semantic"
-    )
-    parser.add_argument(
-        "--margin",
-        type=float,
-        default=0.5,
-        help="Triplet Loss 边距，默认 0.5"
-    )
-    parser.add_argument(
-        "--data-file",
-        type=str,
-        default=None,
-        help="训练数据文件名（默认根据 chunk_method 自动选择）"
-    )
-    parser.add_argument(
-        "--chunks-file",
-        type=str,
-        default=None,
-        help="Chunks 文件名（默认根据 chunk_method 自动选择）"
-    )
-    parser.add_argument(
-        "--model-name",
-        type=str,
-        default="sentence-transformers/all-MiniLM-L6-v2",
-        help="基座模型名称"
-    )
-    parser.add_argument(
-        "--output-name",
-        type=str,
-        default="sentence-transformers/all-MiniLM-L6-v2-FFT",
-        help="输出模型名称"
-    )
-    parser.add_argument(
-        "--max-epochs",
-        type=int,
-        default=10,
-        help="最大训练轮数"
-    )
-    parser.add_argument(
-        "--patience",
-        type=int,
-        default=3,
-        help="早停容忍轮数"
-    )
+    parser = argparse.ArgumentParser(description="MiniLM 全参数微调批量训练脚本")
     parser.add_argument(
         "--no-cuda",
         action="store_true",
@@ -370,27 +476,36 @@ if __name__ == "__main__":
     parser.add_argument(
         "--skip-lr-finder",
         action="store_true",
-        help="跳过学习率查找器"
+        help="跳过学习率查找器，使用默认学习率"
     )
     parser.add_argument(
         "--manual-lr",
         type=float,
-        default=None,
-        help="手动指定学习率（跳过学习率查找器）"
+        default=2e-5,
+        help="手动指定的学习率，默认 2e-5"
+    )
+    parser.add_argument(
+        "--output-name",
+        type=str,
+        default="training_results_FFT",
+        help="结果文件名（保存到项目根目录）"
     )
 
     args = parser.parse_args()
 
-    train_minilm_fft(
-        chunk_method=args.chunk_method,
-        margin=args.margin,
-        data_file=args.data_file,
-        chunks_file=args.chunks_file,
-        model_name=args.model_name,
-        output_name=args.output_name,
-        max_epochs=args.max_epochs,
-        patience=args.patience,
+    # 执行批量训练
+    results = train_all_configs(
         use_cuda=not args.no_cuda,
         skip_lr_finder=args.skip_lr_finder,
         manual_lr=args.manual_lr,
     )
+
+    # 保存结果表格
+    output_path = PROJECT_ROOT / args.output_name
+    save_results_table(results, output_path)
+
+    print("\n" + "=" * 60)
+    print("批量训练完成")
+    print("=" * 60)
+    print(f"共训练 {len(results)} 次")
+    print(f"结果保存到：{PROJECT_ROOT}")
