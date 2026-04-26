@@ -1,0 +1,74 @@
+[
+  {
+    "chunk_method": "semantic",
+    "margin": 0.3,
+    "train_time": 355.45889472961426,
+    "memory_mb": 6302.80859375,
+    "actual_epochs": 15,
+    "best_eval_loss": 0.17308477844510758,
+    "learning_rate": 7.762471166286917e-05,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-FFT-semantic-0.3",
+    "train_samples": 3892,
+    "eval_samples": 432
+  },
+  {
+    "chunk_method": "semantic",
+    "margin": 0.4,
+    "train_time": 333.4029595851898,
+    "memory_mb": 6478.947265625,
+    "actual_epochs": 14,
+    "best_eval_loss": 0.2304174793618066,
+    "learning_rate": 1.288249551693134e-05,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-FFT-semantic-0.4",
+    "train_samples": 3892,
+    "eval_samples": 432
+  },
+  {
+    "chunk_method": "semantic",
+    "margin": 0.5,
+    "train_time": 461.84989309310913,
+    "memory_mb": 6654.458984375,
+    "actual_epochs": 20,
+    "best_eval_loss": 0.2932619942086084,
+    "learning_rate": 1.4791083881682075e-05,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-FFT-semantic-0.5",
+    "train_samples": 3892,
+    "eval_samples": 432
+  },
+  {
+    "chunk_method": "sliding",
+    "margin": 0.3,
+    "train_time": 340.4912395477295,
+    "memory_mb": 6303.38671875,
+    "actual_epochs": 12,
+    "best_eval_loss": 0.15652448497712612,
+    "learning_rate": 3.890451449942805e-05,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-FFT-sliding-0.3",
+    "train_samples": 4494,
+    "eval_samples": 499
+  },
+  {
+    "chunk_method": "sliding",
+    "margin": 0.4,
+    "train_time": 213.73120141029358,
+    "memory_mb": 6478.7529296875,
+    "actual_epochs": 7,
+    "best_eval_loss": 0.24431845545768738,
+    "learning_rate": 0.00010232929922807541,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-FFT-sliding-0.4",
+    "train_samples": 4494,
+    "eval_samples": 499
+  },
+  {
+    "chunk_method": "sliding",
+    "margin": 0.5,
+    "train_time": 264.4396116733551,
+    "memory_mb": 6566.18212890625,
+    "actual_epochs": 9,
+    "best_eval_loss": 0.2867527920752764,
+    "learning_rate": 0.0001096478196143185,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-FFT-sliding-0.5",
+    "train_samples": 4494,
+    "eval_samples": 499
+  }
+]

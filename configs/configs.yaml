@@ -52,3 +52,17 @@ query:
     small: 200
     medium: 500
     large: 1000
+
+# FFT 训练配置
+fft:
+  chunk_methods:
+    - semantic
+    - sliding
+  margins:
+    - 0.3
+    - 0.4
+    - 0.5
+  batch_size: 64
+  warmup_ratio: 0.1
+  max_epochs: 20
+  patience: 3

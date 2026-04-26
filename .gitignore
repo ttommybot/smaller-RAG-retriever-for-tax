@@ -33,6 +33,8 @@ data/query/*
 !data/query/.gitkeep
 data/training/*
 !data/training/.gitkeep
+data/evaluations/*
+!data/evaluations/.gitkeep
 
 # Vector database
 vectordb/*
