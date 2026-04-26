@@ -1,0 +1,74 @@
+[
+  {
+    "chunk_method": "semantic",
+    "margin": 0.3,
+    "train_time": 177.51703190803528,
+    "memory_mb": 4868.69482421875,
+    "actual_epochs": 10,
+    "best_eval_loss": 0.22842981772763388,
+    "learning_rate": 0.0002,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-LoRA-semantic-0.3",
+    "train_samples": 3892,
+    "eval_samples": 432
+  },
+  {
+    "chunk_method": "semantic",
+    "margin": 0.4,
+    "train_time": 177.5671362876892,
+    "memory_mb": 4954.7412109375,
+    "actual_epochs": 10,
+    "best_eval_loss": 0.3051409955535616,
+    "learning_rate": 0.0002,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-LoRA-semantic-0.4",
+    "train_samples": 3892,
+    "eval_samples": 432
+  },
+  {
+    "chunk_method": "semantic",
+    "margin": 0.5,
+    "train_time": 178.90466237068176,
+    "memory_mb": 4865.04345703125,
+    "actual_epochs": 10,
+    "best_eval_loss": 0.37758432967322214,
+    "learning_rate": 0.0002,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-LoRA-semantic-0.5",
+    "train_samples": 3892,
+    "eval_samples": 432
+  },
+  {
+    "chunk_method": "sliding",
+    "margin": 0.3,
+    "train_time": 213.48513007164001,
+    "memory_mb": 4954.7412109375,
+    "actual_epochs": 10,
+    "best_eval_loss": 0.18691463768482208,
+    "learning_rate": 0.0002,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-LoRA-sliding-0.3",
+    "train_samples": 4494,
+    "eval_samples": 499
+  },
+  {
+    "chunk_method": "sliding",
+    "margin": 0.4,
+    "train_time": 213.8638825416565,
+    "memory_mb": 5042.89501953125,
+    "actual_epochs": 10,
+    "best_eval_loss": 0.24757567420601845,
+    "learning_rate": 0.0002,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-LoRA-sliding-0.4",
+    "train_samples": 4494,
+    "eval_samples": 499
+  },
+  {
+    "chunk_method": "sliding",
+    "margin": 0.5,
+    "train_time": 213.55233311653137,
+    "memory_mb": 5128.515625,
+    "actual_epochs": 10,
+    "best_eval_loss": 0.32651068828999996,
+    "learning_rate": 0.0002,
+    "output_model": "/root/rag_for_tax/models/sentence-transformers--all-MiniLM-L6-v2-LoRA-sliding-0.5",
+    "train_samples": 4494,
+    "eval_samples": 499
+  }
+]

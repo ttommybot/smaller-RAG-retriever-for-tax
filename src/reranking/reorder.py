@@ -12,7 +12,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
-from src.reranking.reranker import score_query_chunks
+# 兼容导入：支持从 src 目录或项目根目录运行
+try:
+    from src.reranking.reranker import score_query_chunks
+except ImportError:
+    from reranking.reranker import score_query_chunks
 
 
 DocLike = Union[str, Dict[str, Any]]
