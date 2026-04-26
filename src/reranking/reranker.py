@@ -11,7 +11,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
-from src.utils.config_loader import load_config
+# 兼容导入：支持从 src 目录或项目根目录运行
+try:
+    from src.utils.config_loader import load_config
+except ImportError:
+    from utils.config_loader import load_config
 
 try:
     from sentence_transformers import CrossEncoder

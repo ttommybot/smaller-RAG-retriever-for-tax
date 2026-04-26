@@ -320,6 +320,127 @@ def embed_query_student(text: str, normalize: bool = True) -> np.ndarray:
     return embeddings[0]
 
 
+# ==================== Custom 模型加载 ====================
+
+_custom_model_cache: Dict[str, SentenceTransformer] = {}
+
+
+def load_custom_model(model_name_or_path: str) -> SentenceTransformer:
+    """
+    加载自定义模型（用于微调后的模型评估）。
+
+    参数
+    ----------
+    model_name_or_path : str
+        模型名称或路径。
+        - 如果是本地路径（如 "models/sentence-transformers--all-MiniLM-L6-v2-FFT-semantic-0.3"），直接加载
+        - 如果是模型名称（如 "sentence-transformers--all-MiniLM-L6-v2-FFT-semantic-0.3"），尝试从 models 目录加载
+
+    返回
+    ----
+    SentenceTransformer
+        加载后的模型实例。
+    """
+    # 检查缓存
+    if model_name_or_path in _custom_model_cache:
+        return _custom_model_cache[model_name_or_path]
+
+    # 确定模型路径
+    if Path(model_name_or_path).exists():
+        model_path = Path(model_name_or_path)
+    else:
+        # 尝试从 models 目录加载
+        current_file = Path(__file__).resolve()
+        project_root = current_file.parent.parent.parent
+        models_dir = project_root / "models"
+        model_path = models_dir / model_name_or_path
+
+        if not model_path.exists():
+            raise FileNotFoundError(f"模型未找到：{model_name_or_path}")
+
+    print(f"正在加载自定义模型：{model_path}")
+    model = SentenceTransformer(str(model_path))
+    _custom_model_cache[model_name_or_path] = model
+    print(f"模型加载完成，设备：{model.device}")
+
+    return model
+
+
+def embed_texts_custom(texts: List[str], model: SentenceTransformer, normalize: bool = True) -> np.ndarray:
+    """
+    使用自定义模型批量编码文本列表。
+
+    参数
+    ----------
+    texts : List[str]
+        待编码的文本列表。
+    model : SentenceTransformer
+        自定义模型实例。
+    normalize : bool, optional
+        是否对输出向量进行归一化，默认为 True。
+
+    返回
+    -------
+    np.ndarray
+        形状为 (n_texts, embedding_dim) 的向量矩阵。
+    """
+    texts = [str(t) for t in texts if t is not None]
+    embeddings = model.encode(texts, normalize_embeddings=normalize)
+    return embeddings
+
+
+def embed_query_custom(text: str, model: SentenceTransformer, normalize: bool = True) -> np.ndarray:
+    """
+    使用自定义模型编码单条查询文本。
+
+    参数
+    ----------
+    text : str
+        待编码的查询文本。
+    model : SentenceTransformer
+        自定义模型实例。
+    normalize : bool, optional
+        是否对输出向量进行归一化，默认为 True。
+
+    返回
+    -------
+    np.ndarray
+        形状为 (embedding_dim,) 的向量。
+    """
+    embeddings = embed_texts_custom([str(text)], model, normalize=normalize)
+    return embeddings[0]
+
+
+def get_custom_embedder(model_name_or_path: str) -> Dict[str, Any]:
+    """
+    获取自定义模型的 embedder 接口。
+
+    参数
+    ----------
+    model_name_or_path : str
+        模型名称或路径。
+
+    返回
+    -------
+    Dict[str, Any]
+        包含 load、model、embed_texts、embed_query 函数的字典。
+
+    示例
+    ----
+    >>> embedder = get_custom_embedder('sentence-transformers--all-MiniLM-L6-v2-FFT-semantic-0.3')
+    >>> model = embedder['model']
+    >>> embeddings = embedder['embed_texts'](['文本 1', '文本 2'])
+    """
+    model = load_custom_model(model_name_or_path)
+
+    return {
+        'load': lambda: load_custom_model(model_name_or_path),
+        'model': model,
+        'embed_texts': lambda texts, normalize=True: embed_texts_custom(texts, model, normalize),
+        'embed_query': lambda text, normalize=True: embed_query_custom(text, model, normalize)
+    }
+
+
 # ==================== 统一接口 ====================
 
 # 模型类型映射

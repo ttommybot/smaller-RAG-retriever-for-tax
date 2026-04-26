@@ -25,7 +25,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import numpy as np
 
-from .embedder import get_embedder, _load_config
+from .embedder import get_embedder, _load_config, load_custom_model, get_custom_embedder
 
 
 # ==================== 向量库目录管理 ====================
@@ -45,6 +45,113 @@ def get_vectorstore_dir() -> Path:
     vector_db_dir = config.get('paths', {}).get('vector_db_dir', 'vectordb')
 
     return project_root / vector_db_dir
+
+
+# ==================== 模型名称解析 ====================
+
+def parse_model_name(model_name: str) -> Dict[str, Any]:
+    """
+    从模型名称中解析 chunk 方法和模型类型。
+
+    参数
+    ----------
+    model_name : str
+        模型名称，如 "sentence-transformers--all-MiniLM-L6-v2-FFT-semantic-0.3"
+
+    返回
+    -------
+    Dict[str, Any]
+        包含解析结果的字典：
+        - chunk_method: 'semantic' | 'sliding' | None (需要尝试两种)
+        - is_finetuned: bool (是否是微调模型)
+        - method: 'FFT' | 'LoRA' | None (微调方法)
+        - margin: float | None (margin 值)
+    """
+    result = {
+        'chunk_method': None,
+        'is_finetuned': False,
+        'method': None,
+        'margin': None
+    }
+
+    # 检查是否是微调模型
+    if 'FFT' in model_name or 'LoRA' in model_name:
+        result['is_finetuned'] = True
+        if 'FFT' in model_name:
+            result['method'] = 'FFT'
+        elif 'LoRA' in model_name:
+            result['method'] = 'LoRA'
+
+    # 解析 chunk 方法
+    if 'semantic' in model_name.lower():
+        # 注意区分 'semantic' 和包含 'semantic' 的情况
+        # 如 "FFT-semantic-0.3" 或 "LoRA-semantic-0.5"
+        result['chunk_method'] = 'semantic'
+    elif 'sliding' in model_name.lower():
+        result['chunk_method'] = 'sliding'
+
+    # 尝试解析 margin
+    import re
+    margin_match = re.search(r'-(\d+\.\d+)$', model_name)
+    if margin_match:
+        result['margin'] = float(margin_match.group(1))
+
+    return result
+
+
+def get_chunk_methods_for_model(model_name: str) -> List[str]:
+    """
+    根据模型名称确定需要使用的 chunk 方法列表。
+
+    参数
+    ----------
+    model_name : str
+        模型名称。
+
+    返回
+    -------
+    List[str]
+        chunk 方法列表：
+        - 如果模型名中包含 'semantic' -> ['semantic']
+        - 如果模型名中包含 'sliding' -> ['sliding']
+        - 否则 -> ['semantic', 'sliding'] (两种都需要)
+    """
+    parsed = parse_model_name(model_name)
+    if parsed['chunk_method']:
+        return [parsed['chunk_method']]
+    return ['semantic', 'sliding']
+
+
+def get_vectorstore_model_dir(model_name: str, chunk_method: str = None) -> Path:
+    """
+    获取指定模型的向量库目录路径。
+
+    参数
+    ----------
+    model_name : str
+        模型名称。
+    chunk_method : str, optional
+        chunk 方法，如果模型名中已包含 chunk 方法，则不需要指定。
+
+    返回
+    -------
+    Path
+        向量库目录路径：
+        - 如果需要两种 chunk 方法：vectordb/{model_name}_{chunk_method}
+        - 否则：vectordb/{model_name}
+    """
+    vectorstore_dir = get_vectorstore_dir()
+    parsed = parse_model_name(model_name)
+
+    if parsed['chunk_method']:
+        # 模型名中已有 chunk 方法
+        return vectorstore_dir / model_name
+    elif chunk_method:
+        # 需要指定 chunk 方法
+        return vectorstore_dir / f"{model_name}_{chunk_method}"
+    else:
+        # 默认 semantic
+        return vectorstore_dir / model_name
 
 
 # ==================== 构建向量库 ====================
@@ -207,6 +314,309 @@ def build_all_vectorstores(
     print("\n" + "=" * 60)
     print("全部 6 套向量库构建完成")
     print("=" * 60)
+
+    return results
+
+
+# ==================== 自定义模型向量库 ====================
+
+def load_chunks_for_method(chunk_method: str) -> List[Dict[str, Any]]:
+    """
+    加载指定 chunk 方法的 chunks 数据。
+
+    参数
+    ----------
+    chunk_method : str
+        chunk 方法，'semantic' 或 'sliding'。
+
+    返回
+    -------
+    List[Dict[str, Any]]
+        chunks 列表。
+    """
+    import json
+
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent.parent
+    processed_dir = project_root / "data" / "processed"
+
+    if chunk_method == 'semantic':
+        chunks_file = processed_dir / "chunks_semantic_cleaned.json"
+    elif chunk_method == 'sliding':
+        chunks_file = processed_dir / "chunks_sliding_cleaned.json"
+    else:
+        raise ValueError(f"未知的 chunk 方法：{chunk_method}")
+
+    if not chunks_file.exists():
+        raise FileNotFoundError(f"Chunks 文件不存在：{chunks_file}")
+
+    with open(chunks_file, 'r', encoding='utf-8') as f:
+        chunks = json.load(f)
+
+    print(f"加载 {len(chunks)} 个 chunks ({chunk_method})")
+    return chunks
+
+
+def build_vectorstore_for_custom_model(
+    model_name: str,
+    chunk_method: str = None,
+    batch_size: int = 32,
+    save_path: Optional[str] = None,
+    force_rebuild: bool = False
+) -> Dict[str, Any]:
+    """
+    使用自定义模型构建向量库。
+
+    参数
+    ----------
+    model_name : str
+        模型名称（如 "sentence-transformers--all-MiniLM-L6-v2-FFT-semantic-0.3"）。
+
+    chunk_method : str, optional
+        chunk 方法。如果模型名中已包含 chunk 方法，则不需要指定。
+
+    batch_size : int, optional
+        embedding 批量大小，默认为 32。
+
+    save_path : str, optional
+        向量库保存路径，默认自动生成。
+
+    force_rebuild : bool, optional
+        是否强制重建（即使已存在）。
+
+    返回
+    -------
+    Dict[str, Any]
+        向量库信息。
+    """
+    # 解析模型名
+    parsed = parse_model_name(model_name)
+
+    # 确定 chunk 方法
+    if parsed['chunk_method']:
+        effective_chunk_method = parsed['chunk_method']
+    elif chunk_method:
+        effective_chunk_method = chunk_method
+    else:
+        raise ValueError(f"模型名中未包含 chunk 方法，需要指定 chunk_method 参数")
+
+    # 确定保存目录
+    if save_path:
+        save_dir = Path(save_path)
+    else:
+        save_dir = get_vectorstore_model_dir(model_name, effective_chunk_method)
+
+    # 检查是否已存在
+    embeddings_path = save_dir / "embeddings.npy"
+    if embeddings_path.exists() and not force_rebuild:
+        print(f"向量库已存在：{save_dir}")
+        return load_vectorstore_for_custom_model(model_name, effective_chunk_method, save_dir)
+
+    print("=" * 60)
+    print(f"构建向量库：{model_name} ({effective_chunk_method})")
+    print("=" * 60)
+
+    # 加载模型
+    embedder = get_custom_embedder(model_name)
+    model = embedder['model']
+
+    # 加载 chunks
+    chunks = load_chunks_for_method(effective_chunk_method)
+
+    # 提取文本内容
+    texts = [chunk['content'] for chunk in chunks]
+
+    # 批量生成 embedding
+    all_embeddings = []
+    total_batches = (len(texts) + batch_size - 1) // batch_size
+
+    print(f"\n开始生成 embedding，共 {len(texts)} 个文本块...")
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i:i + batch_size]
+        batch_num = i // batch_size + 1
+        print(f"  处理批次 {batch_num}/{total_batches}...", end="\r")
+        embeddings = embedder['embed_texts'](batch_texts, normalize=True)
+        all_embeddings.append(embeddings)
+
+    all_embeddings = np.vstack(all_embeddings)
+    print(f"\nEmbedding 生成完成！形状：{all_embeddings.shape}")
+
+    # 创建保存目录
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    # 保存向量
+    np.save(embeddings_path, all_embeddings)
+    print(f"向量已保存：{embeddings_path}")
+
+    # 保存 chunk 元数据
+    metadata_path = save_dir / "metadata.pkl"
+    with open(metadata_path, 'wb') as f:
+        pickle.dump(chunks, f)
+    print(f"元数据已保存：{metadata_path}")
+
+    # 保存配置信息
+    info = {
+        'model_name': model_name,
+        'chunk_method': effective_chunk_method,
+        'num_chunks': len(chunks),
+        'embedding_dim': all_embeddings.shape[1],
+        'batch_size': batch_size
+    }
+    info_path = save_dir / "info.json"
+    with open(info_path, 'w', encoding='utf-8') as f:
+        json.dump(info, f, ensure_ascii=False, indent=2)
+    print(f"配置信息已保存：{info_path}")
+
+    print("\n" + "=" * 60)
+    print("向量库构建完成")
+    print("=" * 60)
+
+    return {
+        'embeddings': all_embeddings,
+        'chunks': chunks,
+        'model_name': model_name,
+        'chunk_method': effective_chunk_method,
+        'embedding_dim': all_embeddings.shape[1],
+        'save_dir': save_dir
+    }
+
+
+def load_vectorstore_for_custom_model(
+    model_name: str,
+    chunk_method: str = None,
+    vectorstore_dir: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    加载自定义模型的向量库。
+
+    参数
+    ----------
+    model_name : str
+        模型名称。
+
+    chunk_method : str, optional
+        chunk 方法（如果模型名中未包含）。
+
+    vectorstore_dir : str, optional
+        向量库目录路径。
+
+    返回
+    -------
+    Dict[str, Any]
+        向量库信息。
+    """
+    # 解析模型名
+    parsed = parse_model_name(model_name)
+
+    # 确定 chunk 方法
+    if parsed['chunk_method']:
+        effective_chunk_method = parsed['chunk_method']
+    elif chunk_method:
+        effective_chunk_method = chunk_method
+    else:
+        effective_chunk_method = 'semantic'  # 默认
+
+    # 确定加载目录
+    if vectorstore_dir:
+        load_dir = Path(vectorstore_dir)
+    else:
+        load_dir = get_vectorstore_model_dir(model_name, effective_chunk_method)
+
+    print("=" * 60)
+    print(f"加载向量库：{model_name} ({effective_chunk_method})")
+    print("=" * 60)
+
+    # 加载向量
+    embeddings_path = load_dir / "embeddings.npy"
+    if not embeddings_path.exists():
+        raise FileNotFoundError(f"向量文件不存在：{embeddings_path}")
+    embeddings = np.load(embeddings_path)
+    print(f"向量已加载：{embeddings_path}, 形状：{embeddings.shape}")
+
+    # 加载元数据
+    metadata_path = load_dir / "metadata.pkl"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"元数据文件不存在：{metadata_path}")
+    with open(metadata_path, 'rb') as f:
+        chunks = pickle.load(f)
+    print(f"元数据已加载：{metadata_path}, 共 {len(chunks)} 个 chunk")
+
+    # 加载配置信息
+    info_path = load_dir / "info.json"
+    if info_path.exists():
+        with open(info_path, 'r', encoding='utf-8') as f:
+            info = json.load(f)
+    else:
+        info = {
+            'model_name': model_name,
+            'chunk_method': effective_chunk_method,
+            'num_chunks': len(chunks),
+            'embedding_dim': embeddings.shape[1]
+        }
+
+    print(f"\n向量库加载完成")
+    print(f"  - Chunk 数量：{len(chunks)}")
+    print(f"  - 向量维度：{embeddings.shape[1]}")
+    print(f"  - 模型：{model_name}")
+
+    return {
+        'embeddings': embeddings,
+        'chunks': chunks,
+        'model_name': model_name,
+        'chunk_method': effective_chunk_method,
+        'embedding_dim': embeddings.shape[1],
+        'load_dir': load_dir
+    }
+
+
+def search_custom_vectorstore(
+    query: str,
+    vectorstore: Dict[str, Any],
+    model: Any = None,
+    top_k: int = 5
+) -> List[Tuple[Dict[str, Any], float]]:
+    """
+    使用自定义模型检索向量库。
+
+    参数
+    ----------
+    query : str
+        查询文本。
+    vectorstore : Dict[str, Any]
+        向量库信息。
+    model : Any, optional
+        预加载的模型（避免重复加载）。
+    top_k : int, optional
+        返回结果数量。
+
+    返回
+    -------
+    List[Tuple[Dict[str, Any], float]]
+        (chunk, similarity_score) 列表。
+    """
+    model_name = vectorstore.get('model_name')
+
+    # 加载模型
+    if model is None:
+        embedder = get_custom_embedder(model_name)
+        model = embedder['model']
+
+    # 生成查询向量
+    query_vector = model.encode([str(query).strip()], normalize_embeddings=True)
+    query_vector = query_vector.reshape(1, -1)
+
+    embeddings = vectorstore['embeddings']
+    chunks = vectorstore['chunks']
+
+    # 余弦相似度
+    similarities = np.dot(embeddings, query_vector.T).flatten()
+    top_indices = np.argsort(similarities)[::-1][:top_k]
+
+    results = []
+    for idx in top_indices:
+        chunk = chunks[idx]
+        score = float(similarities[idx])
+        results.append((chunk, score))
 
     return results
 
