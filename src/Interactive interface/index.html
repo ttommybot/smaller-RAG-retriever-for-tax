@@ -54,36 +54,88 @@
 
     <!-- 主要内容区 -->
     <main class="flex-grow container mx-auto px-4 py-6">
-        <div class="max-w-3xl mx-auto bg-white rounded-lg shadow-lg overflow-hidden">
-            <!-- 对话历史区域 -->
-            <div id="chat-history" class="h-[500px] overflow-y-auto scrollbar-hide p-4 bg-gray-50">
-                <!-- 系统欢迎消息 -->
-                <div class="flex mb-4">
-                    <div class="flex-shrink-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white">
-                        <i class="fa fa-robot"></i>
+        <div class="max-w-3xl mx-auto">
+            <!-- 配置面板 -->
+            <div class="bg-white rounded-lg shadow-lg p-4 mb-4">
+                <div class="flex flex-wrap items-center gap-4">
+                    <!-- 模型选择 -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-sm font-medium text-gray-700">
+                            <i class="fa fa-cube mr-1"></i> 模型：
+                        </label>
+                        <select id="model-select" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 min-w-[200px]">
+                            <option value="">请选择模型...</option>
+                        </select>
                     </div>
-                    <div class="ml-3 bg-white p-3 rounded-lg shadow-sm max-w-[80%]">
-                        <p class="text-gray-700">你好！我是RAG对话系统，请问有什么可以帮助你的？</p>
+
+                    <!-- Chunk方法选择 -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-sm font-medium text-gray-700">
+                            <i class="fa fa-puzzle-piece mr-1"></i> Chunk：
+                        </label>
+                        <select id="chunk-select" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 min-w-[100px]">
+                            <option value="semantic">semantic</option>
+                            <option value="sliding">sliding</option>
+                        </select>
                     </div>
+
+                    <!-- Reranker开关 -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-sm font-medium text-gray-700">
+                            <i class="fa fa-sort mr-1"></i> Reranker：
+                        </label>
+                        <button id="reranker-toggle" class="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-300 transition-colors focus:outline-none">
+                            <span id="reranker-indicator" class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-1"></span>
+                        </button>
+                        <span id="reranker-status" class="text-sm text-gray-500">关闭</span>
+                    </div>
+
+                    <!-- 应用配置按钮 -->
+                    <button id="apply-config" class="bg-primary text-white px-4 py-1.5 rounded text-sm hover:bg-primary/90 transition-colors">
+                        <i class="fa fa-check mr-1"></i> 应用配置
+                    </button>
+                </div>
+
+                <!-- 配置状态显示 -->
+                <div id="config-status" class="mt-3 text-sm text-gray-500 hidden">
+                    <i class="fa fa-info-circle mr-1"></i>
+                    <span id="config-info"></span>
                 </div>
             </div>
 
-            <!-- 输入区域 -->
-            <div class="border-t p-4 bg-white">
-                <form id="chat-form" class="flex items-center">
-                    <input 
-                        type="text" 
-                        id="user-input" 
-                        placeholder="请输入你的问题..." 
-                        class="flex-grow border border-gray-300 rounded-l-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
-                    >
-                    <button 
-                        type="submit" 
-                        class="bg-primary text-white px-6 py-2 rounded-r-lg hover:bg-primary/90 transition-colors"
-                    >
-                        <i class="fa fa-paper-plane mr-1"></i> 发送
-                    </button>
-                </form>
+            <!-- 对话区域 -->
+            <div class="bg-white rounded-lg shadow-lg overflow-hidden">
+                <!-- 对话历史区域 -->
+                <div id="chat-history" class="h-[400px] overflow-y-auto scrollbar-hide p-4 bg-gray-50">
+                    <!-- 系统欢迎消息 -->
+                    <div class="flex mb-4">
+                        <div class="flex-shrink-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white">
+                            <i class="fa fa-robot"></i>
+                        </div>
+                        <div class="ml-3 bg-white p-3 rounded-lg shadow-sm max-w-[80%]">
+                            <p class="text-gray-700">你好！我是RAG对话系统。</p>
+                            <p class="text-gray-500 text-sm mt-1">请先在上方选择模型配置，然后开始提问。</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 输入区域 -->
+                <div class="border-t p-4 bg-white">
+                    <form id="chat-form" class="flex items-center">
+                        <input
+                            type="text"
+                            id="user-input"
+                            placeholder="请输入你的问题..."
+                            class="flex-grow border border-gray-300 rounded-l-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
+                        >
+                        <button
+                            type="submit"
+                            class="bg-primary text-white px-6 py-2 rounded-r-lg hover:bg-primary/90 transition-colors"
+                        >
+                            <i class="fa fa-paper-plane mr-1"></i> 发送
+                        </button>
+                    </form>
+                </div>
             </div>
         </div>
     </main>
