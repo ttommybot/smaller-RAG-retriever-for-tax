@@ -47,7 +47,7 @@ CONFIG = {
     "eval_data_dir": PROJECT_ROOT / "data" / "evaluations",
     "eval_queries_file": PROJECT_ROOT / "data" / "query" / "evaluation_queries.txt",
     "eval_results_dir": PROJECT_ROOT / "data" / "evaluations" / "results",
-    "k_list": [1, 3, 5, 10],
+    "k_list": [10],
     "chunk_types": ["semantic", "sliding"],
     "gt_file_template": "evaluation_criteria_{chunk_type}.jsonl",
     "top_k_retrieval": 20,  # 检索数量（重排前）
